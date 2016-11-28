@@ -705,7 +705,7 @@ class TIFF(ctypes.c_void_p):
             num_irows = 1
         num_icols = self.GetField("ImageWidth")
         if num_icols is None:
-            raise ValueError("TIFFTAG_TILEWIDTH must be set to write tiles")
+            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to write tiles")
         num_idepth = self.GetField("ImageDepth")
         if num_idepth is None:
             num_idepth = 1
@@ -778,13 +778,13 @@ class TIFF(ctypes.c_void_p):
     def read_tiles(self, dtype=np.uint8):
         num_tcols = self.GetField("TileWidth")
         if num_tcols is None:
-            raise ValueError("TIFFTAG_TILEWIDTH must be set to write tiles")
+            raise ValueError("TIFFTAG_TILEWIDTH must be set to read tiles")
         num_trows = self.GetField("TileLength")
         if num_trows is None:
             num_trows = 1
         num_icols = self.GetField("ImageWidth")
         if num_icols is None:
-            raise ValueError("TIFFTAG_TILEWIDTH must be set to write tiles")
+            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")
         num_irows = self.GetField("ImageLength")
         if num_irows is None:
             num_irows = 1
