@@ -330,8 +330,6 @@ tifftags = {
     #                                                         compression
     #                                                         pseudo-tag
     # TIFFTAG_JPEGTABLES              2      u_short*,void**  count & tables
-    # TIFFTAG_SUBIFD                  2      uint16*,uint32** count &
-    #                                                         offsets array
     # TIFFTAG_TRANSFERFUNCTION        1 or 3 uint16**         1<<BitsPerSample
     #                                                         entry arrays
     # TIFFTAG_ICCPROFILE              2      uint32*,void**   count,
@@ -377,6 +375,7 @@ tifftags = {
     TIFFTAG_TILEOFFSETS: (
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
 
+    TIFFTAG_SUBIFD: (ctypes.c_uint32 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint32**  count & IFD arrays
     TIFFTAG_BITSPERSAMPLE: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_CLEANFAXDATA: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_COMPRESSION: (ctypes.c_uint16, lambda _d: _d.value),
@@ -391,7 +390,7 @@ tifftags = {
     TIFFTAG_PLANARCONFIG: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_PREDICTOR: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_RESOLUTIONUNIT: (ctypes.c_uint16, lambda _d: _d.value),
-    TIFFTAG_EXTRASAMPLES: (ctypes.c_uint16 * 2, lambda d:d[1][:d[0].value]),  # uint16*,uint16**  count & types array
+    TIFFTAG_EXTRASAMPLES: (ctypes.c_uint16 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint16**  count & types array
     TIFFTAG_SAMPLEFORMAT: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_YCBCRPOSITIONING: (ctypes.c_uint16, lambda _d: _d.value),
 
@@ -1025,14 +1024,16 @@ class TIFF(ctypes.c_void_p):
             r = libtiff.TIFFGetField(self, tag, rdata_ptr, gdata_ptr,
                                      bdata_ptr)
             data = (rdata, gdata, bdata)
-        elif tag == TIFFTAG_EXTRASAMPLES:
-            count = ctypes.c_uint16()
-            pdt = ctypes.POINTER(ctypes.c_uint16)
-            xsdata = pdt()
-            libtiff.TIFFGetField.argtypes = libtiff.TIFFGetField.argtypes[:2] + [ctypes.c_void_p] * 2
+        elif issubclass(data_type, ctypes.Array) and data_type._length_ == 0:
+            # Variable length array, with the length as first value
+            count = ctypes.c_uint16()  # TODO: some other tags with counts use uint32
+            pdt = ctypes.POINTER(data_type._type_)
+            vldata = pdt()
+            libtiff.TIFFGetField.argtypes = (libtiff.TIFFGetField.argtypes[:2] +
+                                             [ctypes.c_void_p] * 2)
             r = libtiff.TIFFGetField(self, tag, ctypes.byref(count),
-                                     ctypes.byref(xsdata))
-            data = (count, xsdata)
+                                     ctypes.byref(vldata))
+            data = (count, vldata)
         else:
             if issubclass(data_type, ctypes.Array):
                 pdt = ctypes.POINTER(data_type)
@@ -1045,6 +1046,7 @@ class TIFF(ctypes.c_void_p):
                                                 :2] + [ctypes.c_void_p]
                 r = libtiff.TIFFGetField(self, tag, ctypes.byref(data))
             else:
+                # TODO: is this ever used? Is there any tag that is accessed like that?
                 libtiff.TIFFGetField.argtypes = libtiff.TIFFGetField.argtypes[
                                                 :2] + [ctypes.c_uint,
                                                        ctypes.c_void_p]
@@ -1104,6 +1106,9 @@ class TIFF(ctypes.c_void_p):
             r = libtiff.TIFFSetField(self, tag, r_ptr, g_ptr, b_ptr)
         else:
             if issubclass(data_type, (ctypes.Array, tuple, list)):
+                if issubclass(data_type, ctypes.Array) and data_type._length_ == 0:
+                    # Array of 0 means we need to create the right length
+                    data_type = data_type._type_ * len(_value)
                 data = data_type(*_value)
             elif issubclass(data_type,
                             ctypes._Pointer):  # does not include c_char_p
@@ -1911,6 +1916,55 @@ def _test_write_float():
     print(arr2)
 
 
+def _test_write_rgba():
+    tiff = TIFF.open('/tmp/libtiff_test_write.tiff', mode='w')
+    arr = np.zeros((5, 6, 4), np.uint8)
+    for i in np.ndindex(*arr.shape):
+        arr[i] = 20 * i[0] + 10 * i[1] + i[2]
+    print(arr)
+    tiff.write_image(arr, write_rgb=True)
+    del tiff
+
+    tiff = TIFF.open('/tmp/libtiff_test_write.tiff', mode='r')
+    print(tiff.info())
+    arr2 = tiff.read_image()
+    print(arr2)
+
+    np.testing.assert_array_equal(arr, arr2)
+
+
+def _test_tree():
+    # Write a TIFF image with the following tree structure:
+    # Im0 --SubIFD--> Im0,1 ---> Im0,2 ---> Im0,3
+    #  |
+    #  V
+    # Im1
+    tiff = TIFF.open('/tmp/libtiff_test_write.tiff', mode='w')
+    arr = np.zeros((5, 6), np.uint32)
+    for i in np.ndindex(*arr.shape):
+        arr[i] = i[0] + 20 * i[1]
+    print(arr)
+    n = 3
+    tiff.SetField("SubIFD", [0] * n, count=n)
+    tiff.write_image(arr)
+    for i in range(n):
+        arr[0, 0] = i
+        tiff.write_image(arr)
+
+    arr[0, 0] = 255
+    tiff.write_image(arr)
+    del tiff
+
+    tiff = TIFF.open('/tmp/libtiff_test_write.tiff', mode='r')
+    print(tiff.info())
+    n = 0
+    for im in tiff.iter_images(verbose=True):
+        print(im)
+        n += 1
+
+    assert n == 2
+
+
 def _test_copy():
     tiff = TIFF.open('/tmp/libtiff_test_compression.tiff', mode='w')
     arr = np.zeros((5, 6), np.uint32)
@@ -1957,6 +2011,8 @@ if __name__ == '__main__':
     _test_tags_write()
     _test_tags_read()
     _test_write_float()
+    _test_write_rgba()
+    _test_tree()
     _test_write()
     _test_read()
     _test_copy()
