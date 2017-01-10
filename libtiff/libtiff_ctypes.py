@@ -567,8 +567,7 @@ class TIFF(ctypes.c_void_p):
             bits = self.GetField('BitsPerSample')
             sample_format = self.GetField('SampleFormat')
             typ = self.get_numpy_type(bits, sample_format)
-            im = self.read_tiles(typ)
-            return im
+            return self.read_tiles(typ)
         else:
             return self.read_flat_image() # Fist image
 
@@ -1710,7 +1709,7 @@ def _test_tile_write():
     print("Tile Write: SUCCESS")
 
 
-def _test_tile_read(filename=''):
+def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     import sys
     if filename is None:
         if len(sys.argv) != 2:
@@ -1802,6 +1801,47 @@ def _test_tile_read(filename=''):
                0] == 0, "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
     print("Tile Read: SUCCESS")
+
+
+def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
+    """
+    Tests opening a tiled image
+    """
+
+    def assert_image_tag(tiff, tag_name, expected_value):
+        value = tiff.GetField(tag_name)
+        assert value == expected_value, \
+            '%s expected to be %d, but it\'s %d' % (tag_name, expected_value, value)
+
+    # _test_tile_write is called here just to make sure that the image is saved,
+    # even if the order of the tests changed
+    _test_tile_write()
+    tiff = TIFF.open(filename, "r")
+
+    # sets the current image to the second image
+    tiff.SetDirectory(1)
+    # test tag values
+    assert_image_tag(tiff, 'ImageWidth', 3000)
+    assert_image_tag(tiff, 'ImageLength', 2500)
+    assert_image_tag(tiff, 'ImageDepth', 1)
+    assert_image_tag(tiff, 'TileWidth', 512)
+    assert_image_tag(tiff, 'TileLength', 528)
+    assert_image_tag(tiff, 'BitsPerSample', 8)
+    assert_image_tag(tiff, 'Compression', COMPRESSION_NONE)
+
+    # read the image to a NumPy array
+    arr = tiff.read_image()
+    # test image NumPy array dimensions
+    assert arr.shape[0] == 2500, \
+        'Image width expected to be 2500, but It\'s %d' % (arr.shape[0])
+    assert arr.shape[1] == 3000, \
+        'Image height expected to be 3000, but It\'s %d' % (arr.shape[1])
+    
+    # generates the same array that was generated for the image
+    data_array = np.array(list(range(500)) * 6).astype(np.uint8)
+    # tests if the array from the read image is the same of the original image
+    assert (data_array == arr).all(), \
+        'The read tiled image is different from the generated image'
 
 
 def _test_tags_write():
@@ -2021,7 +2061,8 @@ def _test_copy():
 if __name__ == '__main__':
     _test_custom_tags()
     _test_tile_write()
-    _test_tile_read('/home/gstiebler/Projetos/Delmic/images/PalaisDuLouvre.tif')
+    _test_tile_read()
+    _test_tiled_image_read()
     _test_tags_write()
     _test_tags_read()
     _test_write_float()
@@ -2030,3 +2071,4 @@ if __name__ == '__main__':
     _test_write()
     _test_read()
     _test_copy()
+    print('All tests passed.')
