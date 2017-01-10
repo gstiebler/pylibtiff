@@ -510,8 +510,10 @@ class TIFF(ctypes.c_void_p):
         return typ
 
     @debug
-    def read_image(self, verbose=False):
-        """ Read image from TIFF and return it as an array.
+    def read_flat_image(self, verbose=False):
+        """
+        Reads a flat image from TIFF and return it as an array.
+        A flat image is not composed of tiles
         """
         width = self.GetField('ImageWidth')
         height = self.GetField('ImageLength')
@@ -557,6 +559,18 @@ class TIFF(ctypes.c_void_p):
             elem = ReadStrip(strip, arr.ctypes.data + pos, max(size - pos, 0))
             pos += elem
         return arr
+
+    @debug
+    def read_image(self, verbose=False):
+        """ Read image from TIFF and return it as an array. """
+        if self.IsTiled():
+            bits = self.GetField('BitsPerSample')
+            sample_format = self.GetField('SampleFormat')
+            typ = self.get_numpy_type(bits, sample_format)
+            im = self.read_tiles(typ)
+            return im
+        else:
+            return self.read_flat_image() # Fist image
 
     @staticmethod
     def _fix_compression(_value):
@@ -1696,7 +1710,7 @@ def _test_tile_write():
     print("Tile Write: SUCCESS")
 
 
-def _test_tile_read(filename=None):
+def _test_tile_read(filename=''):
     import sys
     if filename is None:
         if len(sys.argv) != 2:
@@ -2007,7 +2021,7 @@ def _test_copy():
 if __name__ == '__main__':
     _test_custom_tags()
     _test_tile_write()
-    _test_tile_read()
+    _test_tile_read('/home/gstiebler/Projetos/Delmic/images/PalaisDuLouvre.tif')
     _test_tags_write()
     _test_tags_read()
     _test_write_float()
