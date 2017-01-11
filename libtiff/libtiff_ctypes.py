@@ -907,6 +907,32 @@ class TIFF(ctypes.c_void_p):
 
     @debug
     def SetSubDirectory(self, diroff):
+        """
+        TIFFSetDirectory changes the current directory
+        and reads its contents with TIFFReadDirectory.
+        The parameter dirnum specifies the subfile/directory as
+        an integer number, with the first directory numbered zero.
+
+        TIFFSetSubDirectory acts like TIFFSetDirectory,
+        except the directory is specified as a file offset instead of an index;
+        this is required for accessing subdirectories
+        linked through a SubIFD tag.
+
+        Parameters
+        ----------
+        diroff: numpy:`ndarray`
+            A NumPy 2D array. The array must be contiguous on memory.
+            Example: arr = np.ascontiguousarray(arr)
+
+        Returns
+        -------
+        int
+            On successful return 1 is returned.
+            Otherwise, 0 is returned if dirnum or diroff
+            specifies a non-existent directory,
+            or if an error was encountered
+            while reading the directory's contents.
+        """
         return libtiff.TIFFSetSubDirectory(self, diroff)
     setsubdirectory = SetSubDirectory
 
