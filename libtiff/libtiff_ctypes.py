@@ -773,8 +773,7 @@ class TIFF(ctypes.c_void_p):
                         else:
                             tile_arr[0, :] = arr[x:x + num_tcols]
 
-                    tile_arr = np.ascontiguousarray(tile_arr)
-                    r = self.WriteTile(tile_arr.ctypes.data, x, y, z, 0)
+                    r = self.WriteTile(tile_arr, x, y, z, 0)
                     status = status + r.value
 
         return status
@@ -812,7 +811,7 @@ class TIFF(ctypes.c_void_p):
         for z in range(0, num_idepth):
             for y in range(0, num_irows, num_trows):
                 for x in range(0, num_icols, num_tcols):
-                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, z, 0)
+                    r = self.ReadTile(tmp_tile, x, y, z, 0)
                     if not r:
                         raise ValueError(
                             "Could not read tile x:%d,y:%d,z:%d from file" % (
@@ -971,17 +970,56 @@ class TIFF(ctypes.c_void_p):
     writeencodedstrip = WriteEncodedStrip
 
     @debug
-    def ReadTile(self, buf, x, y, z, sample):
+    def ReadTile(self, arr, x, y, z, sample):
         """ Read and decode a tile of data from an open TIFF file
+
+        Parameters
+        ----------
+        arr: numpy:`ndarray`
+            A NumPy 2D array. The array must be contiguous on memory.
+            Example: arr = np.ascontiguousarray(arr)
+        x: int
+        y: int
+        z: int
+            It is used if the image is deeper than 1 slice (ImageDepth>1)
+        sample: integer
+            It is used only if data are organized
+            in separate planes (PlanarConfiguration=2)
+
+        Returns
+        -------
+        int
+            -1 if it detects an error;
+            otherwise the number of bytes in the decoded tile is returned.
         """
-        return libtiff.TIFFReadTile(self, buf, x, y, z, sample)
+        return libtiff.TIFFReadTile(self, arr.ctypes.data, x, y, z, sample)
     readtile = ReadTile
 
     @debug
-    def WriteTile(self, buf, x, y, z, sample):
-        """ Encode and write a tile of data to an open TIFF file
+    def WriteTile(self, arr, x, y, z, sample):
+        """ TIFFWriteTile - encode and write a tile of data to an open TIFF file
+
+        Parameters
+        ----------
+        arr: numpy:`ndarray`
+            A NumPy 2D array
+        x: int
+        y: int
+        z: int
+            It is used if the image is deeper than 1 slice (ImageDepth>1)
+        sample: integer
+            It is used only if data are organized
+            in separate planes (PlanarConfiguration=2)
+
+        Returns
+        -------
+        int
+            -1 if it detects an error;
+            otherwise the number of bytes in the tile is returned.
         """
-        r = libtiff.TIFFWriteTile(self, buf, x, y, z, sample)
+        # makes sure that the array is contiguous on memory
+        arr = np.ascontiguousarray(arr)
+        r = libtiff.TIFFWriteTile(self, arr.ctypes.data, x, y, z, sample)
         assert r.value >= 0, repr(r.value)
         return r
     writetile = WriteTile
