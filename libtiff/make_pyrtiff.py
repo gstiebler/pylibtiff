@@ -200,7 +200,7 @@ def generate_pyramid(ofn, im, compressed=False):
     f.SetField(T.TIFFTAG_SUBIFD, [0] * n, count=n)
     f.write_tiles(im)
     f.WriteDirectory() # Needed after write_tiles() to indicate the completion of this image
-    
+
     # Until the size is < 1 tile:
     z = 0
     while all(s > TILE_SIZE for s in shape):
@@ -219,6 +219,19 @@ def generate_pyramid(ofn, im, compressed=False):
         f.write_tiles(subim)
         f.WriteDirectory()    
 
+    f.close()
+
+def read_pyramid(file_name):
+    f = TIFF.open(file_name, mode='r')
+    # get an array of offsets, one for each subimage
+    sub_ifds = f.GetField(T.TIFFTAG_SUBIFD)
+    print(sub_ifds)
+    for sub_ifd in sub_ifds:
+        # set the offset of the current subimage
+        f.SetSubDirectory(sub_ifd)
+        # read the subimage
+        im = f.read_image()
+        print(im.shape)
     f.close()
 
 def main(args):
@@ -246,6 +259,7 @@ def main(args):
         logging.info("Image size is %s", im.shape)
 #        write_image(options.output, im)
         generate_pyramid(options.output, im, compressed=options.compressed)
+        read_pyramid(options.output)
     except:
         logging.exception("Unexpected error while performing action.")
         return 127
