@@ -981,7 +981,9 @@ class TIFF(ctypes.c_void_p):
     def WriteTile(self, buf, x, y, z, sample):
         """ Encode and write a tile of data to an open TIFF file
         """
-        return libtiff.TIFFWriteTile(self, buf, x, y, z, sample)
+        r = libtiff.TIFFWriteTile(self, buf, x, y, z, sample)
+        assert r.value >= 0, repr(r.value)
+        return r
     writetile = WriteTile
 
     closed = False
