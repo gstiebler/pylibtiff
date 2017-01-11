@@ -906,6 +906,11 @@ class TIFF(ctypes.c_void_p):
     setdirectory = SetDirectory
 
     @debug
+    def SetSubDirectory(self, diroff):
+        return libtiff.TIFFSetSubDirectory(self, diroff)
+    setsubdirectory = SetSubDirectory
+
+    @debug
     def Fileno(self):
         return libtiff.TIFFFileno(self)
     fileno = Fileno
