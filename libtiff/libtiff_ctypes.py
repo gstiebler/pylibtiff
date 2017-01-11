@@ -774,8 +774,7 @@ class TIFF(ctypes.c_void_p):
                             tile_arr[0, :] = arr[x:x + num_tcols]
 
                     tile_arr = np.ascontiguousarray(tile_arr)
-                    r = libtiff.TIFFWriteTile(self, tile_arr.ctypes.data, x, y,
-                                              z, 0)
+                    r = self.WriteTile(tile_arr.ctypes.data, x, y, z, 0)
                     status = status + r.value
 
         return status
@@ -813,8 +812,7 @@ class TIFF(ctypes.c_void_p):
         for z in range(0, num_idepth):
             for y in range(0, num_irows, num_trows):
                 for x in range(0, num_icols, num_tcols):
-                    r = libtiff.TIFFReadTile(self, tmp_tile.ctypes.data, x, y,
-                                             z, 0)
+                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, z, 0)
                     if not r:
                         raise ValueError(
                             "Could not read tile x:%d,y:%d,z:%d from file" % (
@@ -971,6 +969,20 @@ class TIFF(ctypes.c_void_p):
         r = libtiff.TIFFWriteEncodedStrip(self, strip, buf, size)
         assert r.value == size, repr((r.value, size))
     writeencodedstrip = WriteEncodedStrip
+
+    @debug
+    def ReadTile(self, buf, x, y, z, sample):
+        """ Read and decode a tile of data from an open TIFF file
+        """
+        return libtiff.TIFFReadTile(self, buf, x, y, z, sample)
+    readtile = ReadTile
+
+    @debug
+    def WriteTile(self, buf, x, y, z, sample):
+        """ Encode and write a tile of data to an open TIFF file
+        """
+        return libtiff.TIFFWriteTile(self, buf, x, y, z, sample)
+    writetile = WriteTile
 
     closed = False
 
