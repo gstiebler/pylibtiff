@@ -509,56 +509,6 @@ class TIFF(ctypes.c_void_p):
             raise NotImplementedError(repr(sample_format))
         return typ
 
-    @debug
-    def read_flat_image(self, verbose=False):
-        """
-        Reads a flat image from TIFF and return it as an array.
-        A flat image is not composed of tiles
-        """
-        width = self.GetField('ImageWidth')
-        height = self.GetField('ImageLength')
-        samples_pp = self.GetField(
-            'SamplesPerPixel')  # this number includes extra samples
-        if samples_pp is None:  # default is 1
-            samples_pp = 1
-        # Note: In the TIFF specification, BitsPerSample and SampleFormat are
-        # per samples. However, libtiff doesn't support mixed format,
-        # so it will always return just one value (or raise an error).
-        bits = self.GetField('BitsPerSample')
-        sample_format = self.GetField('SampleFormat')
-        planar_config = self.GetField('PlanarConfig')
-        if planar_config is None:  # default is contig
-            planar_config = PLANARCONFIG_CONTIG
-        compression = self.GetField('Compression')
-        if compression is None:  # default is no compression
-            compression = COMPRESSION_NONE
-        # TODO: rotate according to orientation
-
-        # TODO: might need special support if bits < 8
-        typ = self.get_numpy_type(bits, sample_format)
-
-        if samples_pp == 1:
-            # only 2 dimensions array
-            arr = np.empty((height, width), typ)
-        else:
-            if planar_config == PLANARCONFIG_CONTIG:
-                arr = np.empty((height, width, samples_pp), typ)
-            elif planar_config == PLANARCONFIG_SEPARATE:
-                arr = np.empty((samples_pp, height, width), typ)
-            else:
-                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
-        size = arr.nbytes
-
-        if compression == COMPRESSION_NONE:
-            ReadStrip = self.ReadRawStrip
-        else:
-            ReadStrip = self.ReadEncodedStrip
-
-        pos = 0
-        for strip in range(self.NumberOfStrips()):
-            elem = ReadStrip(strip, arr.ctypes.data + pos, max(size - pos, 0))
-            pos += elem
-        return arr
 
     @debug
     def read_image(self, verbose=False):
@@ -569,7 +519,50 @@ class TIFF(ctypes.c_void_p):
             typ = self.get_numpy_type(bits, sample_format)
             return self.read_tiles(typ)
         else:
-            return self.read_flat_image() # Fist image
+            width = self.GetField('ImageWidth')
+            height = self.GetField('ImageLength')
+            samples_pp = self.GetField(
+                'SamplesPerPixel')  # this number includes extra samples
+            if samples_pp is None:  # default is 1
+                samples_pp = 1
+            # Note: In the TIFF specification, BitsPerSample and SampleFormat are
+            # per samples. However, libtiff doesn't support mixed format,
+            # so it will always return just one value (or raise an error).
+            bits = self.GetField('BitsPerSample')
+            sample_format = self.GetField('SampleFormat')
+            planar_config = self.GetField('PlanarConfig')
+            if planar_config is None:  # default is contig
+                planar_config = PLANARCONFIG_CONTIG
+            compression = self.GetField('Compression')
+            if compression is None:  # default is no compression
+                compression = COMPRESSION_NONE
+            # TODO: rotate according to orientation
+
+            # TODO: might need special support if bits < 8
+            typ = self.get_numpy_type(bits, sample_format)
+
+            if samples_pp == 1:
+                # only 2 dimensions array
+                arr = np.empty((height, width), typ)
+            else:
+                if planar_config == PLANARCONFIG_CONTIG:
+                    arr = np.empty((height, width, samples_pp), typ)
+                elif planar_config == PLANARCONFIG_SEPARATE:
+                    arr = np.empty((samples_pp, height, width), typ)
+                else:
+                    raise IOError("Unexpected PlanarConfig = %d" % planar_config)
+            size = arr.nbytes
+
+            if compression == COMPRESSION_NONE:
+                ReadStrip = self.ReadRawStrip
+            else:
+                ReadStrip = self.ReadEncodedStrip
+
+            pos = 0
+            for strip in range(self.NumberOfStrips()):
+                elem = ReadStrip(strip, arr.ctypes.data + pos, max(size - pos, 0))
+                pos += elem
+            return arr
 
     @staticmethod
     def _fix_compression(_value):
@@ -1297,7 +1290,7 @@ class TIFF3D(TIFF):
     @debug
     def read_image(self, verbose=False, as3d=True):
         """ Read image from TIFF and return it as a numpy array.
-        
+
         If as3d is passed True (default), will attempt to read multiple
         directories, and restore as slices in a 3D array. ASSUMES that all
         images in the tiff file have the same width, height, bits-per-sample,
