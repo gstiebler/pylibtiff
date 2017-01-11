@@ -1838,9 +1838,9 @@ def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     arr = tiff.read_image()
     # test image NumPy array dimensions
     assert arr.shape[0] == 2500, \
-        'Image width expected to be 2500, but It\'s %d' % (arr.shape[0])
+        'Image width expected to be 2500, but it\'s %d' % (arr.shape[0])
     assert arr.shape[1] == 3000, \
-        'Image height expected to be 3000, but It\'s %d' % (arr.shape[1])
+        'Image height expected to be 3000, but it\'s %d' % (arr.shape[1])
     
     # generates the same array that was generated for the image
     data_array = np.array(list(range(500)) * 6).astype(np.uint8)
