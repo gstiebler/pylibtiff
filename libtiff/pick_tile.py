@@ -21,13 +21,17 @@ def read_tile(fn, p, x, y, z):
     """Read one given tile in a tiff file -> numpy array"""
     f = TIFF.open(fn, mode='r')
 
+    # set page
     f.SetDirectory(p)
     logging.info("Looking for tile %d, %d, %d, %d", p, x, y, z)
+    # get the size of the tile
     num_tcols = f.GetField("TileWidth")
     num_trows = f.GetField("TileLength")
+    # if the image is not tiled, these values are None
     if num_tcols is None or num_trows is None:
         raise ValueError('The image does not have tiles')
 
+    # get the numpy value type
     bits = f.GetField('BitsPerSample')
     sample_format = f.GetField('SampleFormat')
     dtype = f.get_numpy_type(bits, sample_format)
