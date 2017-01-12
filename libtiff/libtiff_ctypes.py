@@ -2032,6 +2032,10 @@ def _test_read_one_tile():
     tiff3d = TIFF.open(filename_tiff3d, "w")
     tiff3d_data = np.zeros((3, 1000, 1000), dtype=np.uint8)
 
+    # write on some pixels to test later
+    tiff3d_data[0, 5, 5] = 8
+    tiff3d_data[1, 3, 2] = 23
+    tiff3d_data[2, 8, 9] = 42
     assert tiff3d.SetField("ImageWidth",
                       tiff3d_data.shape[2]) == 1, "could not set ImageWidth tag" 
     assert tiff3d.SetField("ImageLength",
@@ -2053,7 +2057,12 @@ def _test_read_one_tile():
     tiff3d = TIFF.open(filename_tiff3d, "r")
     # test the tile with 3 dimensions
     tile = tiff.read_one_tile(0, 0)
+    # testing some pixels
     assert tile.shape == (3, 512, 512), repr(tile.shape)
+    assert tile[0, 5, 5] == 8, repr(tile[0, 5, 5])
+    assert tile[1, 3, 2] == 23, repr(tile[1, 3, 2])
+    assert tile[2, 8, 9] == 42, repr(tile[2, 8, 9])
+    assert tile[0, 3, 3] == 0, repr(tile[0, 3, 3])
 
     tiff3d.close()
 
