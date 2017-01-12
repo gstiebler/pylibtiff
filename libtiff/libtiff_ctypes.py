@@ -785,7 +785,11 @@ class TIFF(ctypes.c_void_p):
         Parameters
         ----------
         x: int
+            Index of the first pixel on the X axis.
+            It must be a multiple of the tile width
         y: int
+            Index of the first pixel on the Y axis.
+            It must be a multiple of the tile height
         dtype: int
             The type of numpy items. It can be uint8, uint16, etc.
 
@@ -817,6 +821,11 @@ class TIFF(ctypes.c_void_p):
             raise ValueError("Invalid y value")
         if x < 0 or x >= num_icols:
             raise ValueError("Invalid x value")
+
+        if y % num_trows != 0:
+            raise ValueError("y parameter not a multiple of tile height (%d)" % (num_trows))
+        if x % num_tcols != 0:
+            raise ValueError("x parameter not a multiple of tile width (%d)" % (num_tcols))
 
         # if the tile is in the border, its size should be smaller
         this_tile_height = min(num_trows, num_irows - y)
@@ -1969,8 +1978,37 @@ def _test_read_one_tile():
     _test_tile_write()
     filename = "/tmp/libtiff_test_tile_write.tiff"
     tiff = TIFF.open(filename, "r")
+
+    # the first image is 1 pixel high
     tile = tiff.read_one_tile(0, 0)
     assert tile.shape == (1, 512), repr(tile.shape)
+
+    tiff.SetDirectory(1)
+    tile = tiff.read_one_tile(0, 0)
+    assert tile.shape == (528, 512), repr(tile.shape)
+
+    # test a x value not multiple of the tile width
+    try:
+        tiff.read_one_tile(8, 0)
+        assert False, "An exception must be raised with invalid (x, y) values"
+    except ValueError as inst:
+        assert inst.message == "x parameter not a multiple of tile width (512)",\
+            repr(inst.message)
+
+    # test negative x
+    try:
+        tiff.read_one_tile(-5, 0)
+        assert False, "An exception must be raised with invalid (x, y) values"
+    except ValueError as inst:
+        assert inst.message == "Invalid x value", repr(inst.message)
+
+    # test y greater than the image height
+    try:
+        tiff.read_one_tile(0, 5000)
+        assert False, "An exception must be raised with invalid (x, y) values"
+    except ValueError as inst:
+        assert inst.message == "Invalid y value", repr(inst.message)
+
     tiff.close()
 
 def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
