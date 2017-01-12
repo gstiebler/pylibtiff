@@ -891,19 +891,59 @@ class TIFF(ctypes.c_void_p):
         num_idepth = self.GetField("ImageDepth")
         if num_idepth is None:
             num_idepth = 1
+        samples_pp = self.GetField(
+            'SamplesPerPixel')  # this number includes extra samples
+        if samples_pp is None:  # default is 1
+            samples_pp = 1
+        planar_config = self.GetField('PlanarConfig')
+        if planar_config is None:  # default is contig
+            planar_config = PLANARCONFIG_CONTIG
 
-        if num_idepth == 1 and num_irows == 1:
-            # 1D
-            full_image = np.zeros((num_icols,), dtype=dtype)
-        elif num_idepth == 1:
-            # 2D
-            full_image = np.zeros((num_irows, num_icols), dtype=dtype)
+        if samples_pp == 1:
+            # only 2 dimensions array
+            if num_idepth == 1 and num_irows == 1:
+                # 1D
+                full_image = np.zeros((num_icols,), dtype=dtype)
+            elif num_idepth == 1:
+                # 2D
+                full_image = np.zeros((num_irows, num_icols), dtype=dtype)
+            else:
+                # 3D
+                full_image = np.zeros((num_idepth, num_irows, num_icols),
+                                      dtype=dtype)
+
+            tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
         else:
-            # 3D
-            full_image = np.zeros((num_idepth, num_irows, num_icols),
-                                  dtype=dtype)
+            # more than one sample per pixel
+            if planar_config == PLANARCONFIG_CONTIG:
+                if num_idepth == 1 and num_irows == 1:
+                    # 1D
+                    full_image = np.zeros((num_icols, samples_pp), dtype=dtype)
+                elif num_idepth == 1:
+                    # 2D
+                    full_image = np.zeros((num_irows, num_icols, samples_pp), dtype=dtype)
+                else:
+                    # 3D
+                    full_image = np.zeros((num_idepth, num_irows, num_icols, samples_pp),
+                                          dtype=dtype)
 
-        tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
+                tmp_tile = np.zeros((num_trows, num_tcols, samples_pp), dtype=dtype)
+            elif planar_config == PLANARCONFIG_SEPARATE:
+                if num_idepth == 1 and num_irows == 1:
+                    # 1D
+                    full_image = np.zeros((samples_pp, num_icols), dtype=dtype)
+                elif num_idepth == 1:
+                    # 2D
+                    full_image = np.zeros((samples_pp, num_irows, num_icols), dtype=dtype)
+                else:
+                    # 3D
+                    full_image= np.zeros((num_idepth, samples_pp, num_irows, num_icols, samples_pp),
+                                         dtype=dtype)
+
+                tmp_tile = np.zeros((samples_pp, num_trows, num_tcols), dtype=dtype)
+            else:
+                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
+
         tmp_tile = np.ascontiguousarray(tmp_tile)
         for z in range(0, num_idepth):
             for y in range(0, num_irows, num_trows):
