@@ -1983,11 +1983,27 @@ def _test_read_one_tile():
     tile = tiff.read_one_tile(0, 0)
     assert tile.shape == (1, 512), repr(tile.shape)
 
+    # second image, 3000 x 2500
     tiff.SetDirectory(1)
     tile = tiff.read_one_tile(0, 0)
     assert tile.shape == (528, 512), repr(tile.shape)
 
-    # test a x value not multiple of the tile width
+    tile = tiff.read_one_tile(512, 528)
+    assert tile.shape == (528, 512), repr(tile.shape)
+
+    # test tile on the right border
+    tile = tiff.read_one_tile(2560, 528)
+    assert tile.shape == (528, 440), repr(tile.shape)
+
+    # test tile on the bottom border
+    tile = tiff.read_one_tile(512, 2112)
+    assert tile.shape == (388, 512), repr(tile.shape)
+
+    # test tile on the right and bottom borders
+    tile = tiff.read_one_tile(2560, 2112)
+    assert tile.shape == (388, 440), repr(tile.shape)
+
+    # test x value not multiple of the tile width
     try:
         tiff.read_one_tile(8, 0)
         assert False, "An exception must be raised with invalid (x, y) values"
