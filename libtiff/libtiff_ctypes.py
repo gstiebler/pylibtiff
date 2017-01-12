@@ -2027,6 +2027,37 @@ def _test_read_one_tile():
 
     tiff.close()
 
+    # save an image with depth 3
+    filename_tiff3d = "/tmp/libtiff_test_read_one_tile.tiff"
+    tiff3d = TIFF.open(filename_tiff3d, "w")
+    tiff3d_data = np.zeros((3, 1000, 1000), dtype=np.uint8)
+
+    assert tiff3d.SetField("ImageWidth",
+                      tiff3d_data.shape[2]) == 1, "could not set ImageWidth tag" 
+    assert tiff3d.SetField("ImageLength",
+                      tiff3d_data.shape[1]) == 1, "could not set ImageLength tag"
+    assert tiff3d.SetField("ImageDepth",
+                      tiff3d_data.shape[0]) == 1, "could not set ImageDepth tag" 
+    # Must be multiples of 16
+    assert tiff3d.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
+    assert tiff3d.SetField("TileLength", 512) == 1, "could not set TileLength tag"
+    assert tiff3d.SetField("BitsPerSample",
+                      8) == 1, "could not set BitsPerSample tag"
+    assert tiff3d.SetField("Compression",
+                      COMPRESSION_NONE) == 1, "could not set Compression tag"
+
+    tiff3d.write_tiles(tiff3d_data)
+    tiff3d.close()
+
+    # open the previously saved image
+    tiff3d = TIFF.open(filename_tiff3d, "r")
+    # test the tile with 3 dimensions
+    tile = tiff.read_one_tile(0, 0)
+    assert tile.shape == (3, 512, 512), repr(tile.shape)
+
+    tiff3d.close()
+
+
 def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     """
     Tests opening a tiled image
