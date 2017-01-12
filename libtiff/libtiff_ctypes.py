@@ -812,9 +812,11 @@ class TIFF(ctypes.c_void_p):
         num_idepth = self.GetField("ImageDepth")
         if num_idepth is None:
             num_idepth = 1
-        num_idepth = self.GetField("ImageDepth")
-        if num_idepth is None:
-            num_idepth = 1
+
+        if y < 0 or y >= num_irows:
+            raise ValueError("Invalid y value")
+        if x < 0 or x >= num_icols:
+            raise ValueError("Invalid x value")
 
         # if the tile is in the border, its size should be smaller
         this_tile_height = min(num_trows, num_irows - y)
@@ -824,6 +826,7 @@ class TIFF(ctypes.c_void_p):
             # 2D
             tile = np.zeros((num_trows, num_tcols), dtype=dtype)
 
+            # the numpy array should be contigous in memory before calling ReadTile
             tile = np.ascontiguousarray(tile)
             # even if the tile is on the edge, and the final size will be smaller,
             # the size of the array passed to the ReadTile function
@@ -841,6 +844,7 @@ class TIFF(ctypes.c_void_p):
             # 3D
             tile = np.zeros((num_idepth, this_tile_height, this_tile_width), dtype=dtype)
             tile_one_depth = np.zeros((num_trows, num_tcols), dtype=dtype)
+            # the numpy array should be contigous in memory before calling ReadTile
             tile_one_depth = np.ascontiguousarray(tile_one_depth)
             # iterate over each depth
             for z in range(0, num_idepth):
