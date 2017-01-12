@@ -778,6 +778,90 @@ class TIFF(ctypes.c_void_p):
 
         return status
 
+    def read_one_tile(self, x, y, dtype=np.uint8):
+        """
+        Reads one tile from the TIFF image
+
+        Parameters
+        ----------
+        x: int
+        y: int
+        dtype: int
+            The type of numpy items. It can be uint8, uint16, etc.
+
+        Returns
+        -------
+        numpy.array
+            if the image is deeper than 1 slice (ImageDepth>1), it will
+            return a numpy array with 3 dimensions (depth, y, x). Otherwise
+            it will return a numpy array with 2 dimensions (y, x).
+        """
+
+        num_tcols = self.GetField("TileWidth")
+        if num_tcols is None:
+            raise ValueError("TIFFTAG_TILEWIDTH must be set to read tiles")
+        num_trows = self.GetField("TileLength")
+        if num_trows is None:
+            num_trows = 1
+        num_irows = self.GetField("ImageLength")
+        if num_irows is None:
+            num_irows = 1
+        num_icols = self.GetField("ImageWidth")
+        if num_icols is None:
+            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")
+        num_idepth = self.GetField("ImageDepth")
+        if num_idepth is None:
+            num_idepth = 1
+        num_idepth = self.GetField("ImageDepth")
+        if num_idepth is None:
+            num_idepth = 1
+
+        # if the tile is in the border, its size should be smaller
+        this_tile_height = min(num_trows, num_irows - y)
+        this_tile_width = min(num_tcols, num_icols - x)
+
+        if num_idepth == 1:
+            # 2D
+            tile = np.zeros((num_trows, num_tcols), dtype=dtype)
+
+            tile = np.ascontiguousarray(tile)
+            # even if the tile is on the edge, and the final size will be smaller,
+            # the size of the array passed to the ReadTile function
+            # must be (num_tcols, num_trows)
+            r = self.ReadTile(tile.ctypes.data, x, y, 0, 0)
+            if not r:
+                raise ValueError(
+                    "Could not read tile x:%d,y:%d,z:%d from file" % (x, y, z))
+
+            # check if the tile is on the edge of the image
+            if this_tile_height < num_trows or this_tile_width < num_tcols:
+                # if the tile is on the edge of the image, generate a smaller tile
+                tile = tile[:this_tile_height, :this_tile_width]
+        else:
+            # 3D
+            tile = np.zeros((num_idepth, this_tile_height, this_tile_width), dtype=dtype)
+            tile_one_depth = np.zeros((num_trows, num_tcols), dtype=dtype)
+            tile_one_depth = np.ascontiguousarray(tile_one_depth)
+            # iterate over each depth
+            for z in range(0, num_idepth):
+                # even if the tile is on the edge, and the final size will be smaller,
+                # the size of the array passed to the ReadTile function
+                # must be (num_tcols, num_trows)
+                r = self.ReadTile(tile_one_depth.ctypes.data, x, y, z, 0)
+                if not r:
+                    raise ValueError(
+                        "Could not read tile x:%d,y:%d,z:%d from file" % (x, y, z))
+
+                # check if the tile is on the edge of the image
+                if this_tile_height < num_trows or this_tile_width < num_tcols:
+                    # if the tile is on the edge of the image, generate a smaller tile
+                    tile[z, :this_tile_height, :this_tile_width] = tile_one_depth
+                else:
+                    # copy the tile of the current depth to the final tile
+                    tile[z, :, :] = tile_one_depth
+
+        return tile
+
     def read_tiles(self, dtype=np.uint8):
         num_tcols = self.GetField("TileWidth")
         if num_tcols is None:
@@ -908,12 +992,12 @@ class TIFF(ctypes.c_void_p):
     @debug
     def SetSubDirectory(self, diroff):
         """
-        TIFFSetDirectory changes the current directory
+        Changes the current directory
         and reads its contents with TIFFReadDirectory.
         The parameter dirnum specifies the subfile/directory as
         an integer number, with the first directory numbered zero.
 
-        TIFFSetSubDirectory acts like TIFFSetDirectory,
+        SetSubDirectory acts like SetDirectory,
         except the directory is specified as a file offset instead of an index;
         this is required for accessing subdirectories
         linked through a SubIFD tag.
@@ -1875,6 +1959,15 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     print("Tile Read: Data is the same as expected from tile write test")
     print("Tile Read: SUCCESS")
 
+def _test_read_one_tile():        
+    # _test_tile_write is called here just to make sure that the image is saved,
+    # even if the order of the tests changed
+    _test_tile_write()
+    filename = "/tmp/libtiff_test_tile_write.tiff"
+    tiff = TIFF.open(filename, "r")
+    tile = tiff.read_one_tile(0, 0)
+    assert tile.shape == (1, 512), repr(tile.shape)
+    tiff.close()
 
 def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     """
@@ -2135,6 +2228,7 @@ if __name__ == '__main__':
     _test_custom_tags()
     _test_tile_write()
     _test_tile_read()
+    _test_read_one_tile()
     _test_tiled_image_read()
     _test_tags_write()
     _test_tags_read()
