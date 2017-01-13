@@ -711,9 +711,13 @@ class TIFF(ctypes.c_void_p):
         num_icols = self.GetField("ImageWidth")
         if num_icols is None:
             raise ValueError("TIFFTAG_IMAGEWIDTH must be set to write tiles")
-        num_idepth = self.GetField("ImageDepth")
-        if num_idepth is None:
-            num_idepth = 1
+        # this number includes extra samples
+        samples_pp = self.GetField('SamplesPerPixel')
+        if samples_pp is None:  # default is 1
+            samples_pp = 1
+        planar_config = self.GetField('PlanarConfig')
+        if planar_config is None:  # default is contig
+            planar_config = PLANARCONFIG_CONTIG
 
         if len(arr.shape) == 1 and arr.shape[0] != num_icols:
             raise ValueError(
@@ -725,58 +729,68 @@ class TIFF(ctypes.c_void_p):
             raise ValueError(
                 "Input array %r must have same shape as image tags %r" % (
                     arr.shape, (num_irows, num_icols)))
-        if len(arr.shape) == 3 and (
-                            arr.shape[0] != num_idepth or
-                            arr.shape[1] != num_irows or
-                            arr.shape[2] != num_icols):
-            raise ValueError(
-                "Input array %r must have same shape as image tags %r" % (
-                    arr.shape, (num_idepth, num_irows, num_icols)))
+        if len(arr.shape) == 3:
+            if planar_config == PLANARCONFIG_CONTIG:
+                if (arr.shape[0] != num_irows or
+                        arr.shape[1] != num_icols or
+                        arr.shape[2] != samples_pp):
+                    raise ValueError(
+                        "Input array %r must have same shape as image tags %r" % (
+                            arr.shape, (num_irows, num_icols, samples_pp)))
+            elif planar_config == PLANARCONFIG_SEPARATE:
+                if (arr.shape[0] != samples_pp or
+                        arr.shape[1] != num_irows or
+                        arr.shape[2] != num_icols):
+                    raise ValueError(
+                        "Input array %r must have same shape as image tags %r" % (
+                            arr.shape, (samples_pp, num_irows, num_icols)))
+            else:
+                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
         if len(arr.shape) > 3:
             raise ValueError("Can not write tiles for more than 3 dimensions")
 
-        status = 0
-        tile_arr = np.zeros((num_trows, num_tcols), dtype=arr.dtype)
-        # z direction / depth
-        for z in range(0, num_idepth):
+        def write_plane(arr, plane_index, tile_arr):
+            written_bytes = 0
             # Rows
             for y in range(0, num_irows, num_trows):
                 # Cols
                 for x in range(0, num_icols, num_tcols):
                     # If we are over the edge of the image, use 0 as fill
                     tile_arr[:] = 0
-                    if len(arr.shape) == 3:
-                        if ((y + num_trows) > num_irows) or (
-                                    (x + num_tcols) > num_icols):
-                            tile_arr[:num_irows - y,
-                                     :num_icols - x] = arr[z,
-                                                           y:y + num_trows,
-                                                           x:x + num_tcols]
-                        else:
-                            tile_arr[:, :] = arr[z,
-                                                 y:y + num_trows,
-                                                 x:x + num_tcols]
-                    elif len(arr.shape) == 2:
-                        if ((y + num_trows) > num_irows) or (
-                                    (x + num_tcols) > num_icols):
-                            tile_arr[:num_irows - y,
-                                     :num_icols - x] = arr[y:y + num_trows,
-                                                           x:x + num_tcols]
-                        else:
-                            tile_arr[:, :] = arr[y:y + num_trows,
-                                                 x:x + num_tcols]
-                    elif len(arr.shape) == 1:
-                        # This doesn't make much sense for 1D arrays,
-                        # waste of space if tiles are 2D
-                        if (x + num_tcols) > num_icols:
-                            tile_arr[0, :num_icols - x] = arr[x:x + num_tcols]
-                        else:
-                            tile_arr[0, :] = arr[x:x + num_tcols]
-                    tile_arr = np.ascontiguousarray(tile_arr)
-                    r = self.WriteTile(tile_arr.ctypes.data, x, y, z, 0)
-                    status = status + r.value
 
-        return status
+                    # if the tile is on the edge, it is smaller
+                    tile_width = min(num_tcols, num_icols - x)
+                    tile_height = min(num_trows, num_irows - y)
+
+                    tile_arr[:tile_height, :tile_width] = \
+                        arr[y:y + tile_height, x:x + tile_width]
+
+                    tile_arr = np.ascontiguousarray(tile_arr)
+                    r = self.WriteTile(tile_arr.ctypes.data, x, y, 0, plane_index)
+                    written_bytes += r.value
+
+            return written_bytes
+
+        total_written_bytes = 0
+        if samples_pp == 1:
+            # if there's only one sample per pixel, there is only one plane
+            tile_arr = np.zeros((num_trows, num_tcols), dtype=arr.dtype)
+            total_written_bytes = write_plane(arr, 0, tile_arr)
+        else:
+            if planar_config == PLANARCONFIG_CONTIG:
+                # if there is more than one sample per pixel and it's contiguous in memory,
+                # there is only one plane
+                tile_arr = np.zeros((num_trows, num_tcols, samples_pp), dtype=arr.dtype)
+                total_written_bytes = write_plane(arr, 0, tile_arr)
+            elif planar_config == PLANARCONFIG_SEPARATE:
+                # multiple samples per pixel, each sample in one plane
+                tile_arr = np.zeros((num_trows, num_tcols, samples_pp), dtype=arr.dtype)
+                for plane_index in xrange(samples_pp):
+                    total_written_bytes += write_plane(arr[plane_index], plane_index, tile_arr)
+            else:
+                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
+
+        return total_written_bytes
 
     def read_one_tile(self, x, y, dtype=np.uint8):
         """
@@ -1819,11 +1833,11 @@ def _test_tile_write():
                       8) == 1, "could not set BitsPerSample tag"
     assert a.SetField("Compression",
                       COMPRESSION_NONE) == 1, "could not set Compression tag"
-    data_array = np.array(list(range(500)) * 6).astype(np.uint8)
-    assert a.write_tiles(data_array) == (
-                                            512 * 528) * 6, "could " \
-                                                            "not write " \
-                                                            "tile images"  # 1D
+    data_array = np.tile(list(range(500)), (1, 6)).astype(np.uint8)
+    assert a.write_tiles(data_array) == (512 * 528) * 6, "could " \
+        "not write " \
+        "tile images"  # 1D
+
     a.WriteDirectory()
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
@@ -1842,13 +1856,13 @@ def _test_tile_write():
     assert a.SetField("Compression",
                       COMPRESSION_NONE) == 1, "could not set Compression tag"
     data_array = np.tile(list(range(500)), (2500, 6)).astype(np.uint8)
-    assert a.write_tiles(data_array) == (
-                                            512 * 528) * 5 * 6, "could not " \
-                                                                "write tile " \
-                                                                "images"  # 2D
+    assert a.write_tiles(data_array) == (512 * 528) * 5 * 6, "could not " \
+        "write tile " \
+        "images"  # 2D
     a.WriteDirectory()
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
+    '''
     # 3D Arrays
     assert a.SetField("ImageWidth",
                       3000) == 1, "could not set ImageWidth tag"  # 1D,2D,3D
@@ -1870,6 +1884,7 @@ def _test_tile_write():
                                                                  "images"  # 3D
     a.WriteDirectory()
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
+    '''
 
     print("Tile Write: SUCCESS")
 
@@ -1938,6 +1953,8 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
                0] == 0, "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
 
+    '''
+    TODO replace by multiple samples per pixel
     # 3D Arrays (doesn't make much sense to tile)
     a.SetDirectory(2)
     iwidth = tmp = a.GetField("ImageWidth")
@@ -1965,6 +1982,8 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     assert np.nonzero(data_array.flatten() != test_array)[0].shape[
                0] == 0, "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
+    '''
+
     print("Tile Read: SUCCESS")
 
 def _test_read_one_tile():        
@@ -2025,18 +2044,19 @@ def _test_read_one_tile():
     # save an image with depth 3
     filename_tiff3d = "/tmp/libtiff_test_read_one_tile.tiff"
     tiff3d = TIFF.open(filename_tiff3d, "w")
-    tiff3d_data = np.zeros((3, 1000, 1000), dtype=np.uint8)
+    tiff3d_data = np.zeros((1000, 1000, 3), dtype=np.uint8)
 
     # write on some pixels to test later
-    tiff3d_data[0, 5, 5] = 8
-    tiff3d_data[1, 3, 2] = 23
-    tiff3d_data[2, 8, 9] = 42
-    assert tiff3d.SetField("ImageWidth",
-                      tiff3d_data.shape[2]) == 1, "could not set ImageWidth tag" 
+    tiff3d_data[5, 5, 0] = 8
+    tiff3d_data[3, 2, 1] = 23
+    tiff3d_data[8, 9, 2] = 42
     assert tiff3d.SetField("ImageLength",
-                      tiff3d_data.shape[1]) == 1, "could not set ImageLength tag"
-    assert tiff3d.SetField("ImageDepth",
-                      tiff3d_data.shape[0]) == 1, "could not set ImageDepth tag" 
+                      tiff3d_data.shape[0]) == 1, "could not set ImageLength tag"
+    assert tiff3d.SetField("ImageWidth",
+                      tiff3d_data.shape[1]) == 1, "could not set ImageWidth tag" 
+    assert tiff3d.SetField("SamplesPerPixel",
+                      tiff3d_data.shape[2]) == 1, "could not set SamplesPerPixel tag" 
+    assert tiff3d.SetField("ImageDepth", 1) == 1, "could not set ImageDepth tag"
     # Must be multiples of 16
     assert tiff3d.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
     assert tiff3d.SetField("TileLength", 512) == 1, "could not set TileLength tag"
