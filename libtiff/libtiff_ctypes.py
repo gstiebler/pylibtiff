@@ -888,59 +888,54 @@ class TIFF(ctypes.c_void_p):
         num_irows = self.GetField("ImageLength")
         if num_irows is None:
             num_irows = 1
-        num_idepth = self.GetField("ImageDepth")
-        if num_idepth is None:
-            num_idepth = 1
+        # this number includes extra samples
+        samples_pp = self.GetField('SamplesPerPixel')
+        if samples_pp is None:  # default is 1
+            samples_pp = 1
+        planar_config = self.GetField('PlanarConfig')
+        if planar_config is None:  # default is contig
+            planar_config = PLANARCONFIG_CONTIG
 
-        if num_idepth == 1 and num_irows == 1:
-            # 1D
-            full_image = np.zeros((num_icols,), dtype=dtype)
-        elif num_idepth == 1:
-            # 2D
-            full_image = np.zeros((num_irows, num_icols), dtype=dtype)
-        else:
-            # 3D
-            full_image = np.zeros((num_idepth, num_irows, num_icols),
-                                  dtype=dtype)
-
-        tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
-        tmp_tile = np.ascontiguousarray(tmp_tile)
-        for z in range(0, num_idepth):
-            for y in range(0, num_irows, num_trows):
-                for x in range(0, num_icols, num_tcols):
-                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, z, 0)
+        def read_plane(plane, plane_index, tmp_tile):
+            for y in xrange(0, num_irows, num_trows):
+                for x in xrange(0, num_icols, num_tcols):
+                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, 0, plane_index)
                     if not r:
                         raise ValueError(
                             "Could not read tile x:%d,y:%d,z:%d from file" % (
                                 x, y, z))
 
-                    if ((y + num_trows) > num_irows) or (
-                                (x + num_tcols) > num_icols):
-                        # We only need part of the tile because we are on
-                        # the edge
-                        if num_idepth == 1 and num_irows == 1:
-                            full_image[x:x + num_tcols] = \
-                                tmp_tile[0,:num_icols - x]
-                        elif num_idepth == 1:
-                            full_image[y:y + num_trows,
-                                       x:x + num_tcols] = \
-                                tmp_tile[:num_irows - y,
-                                         :num_icols - x]
-                        else:
-                            full_image[z,
-                                       y:y + num_trows,
-                                       x:x + num_tcols] = \
-                                tmp_tile[:num_irows - y,
-                                         :num_icols - x]
-                    else:
-                        if num_idepth == 1 and num_irows == 1:
-                            full_image[x:x + num_tcols] = tmp_tile[0, :]
-                        elif num_idepth == 1:
-                            full_image[y:y + num_trows,
-                                       x:x + num_tcols] = tmp_tile[:, :]
-                        else:
-                            full_image[z, y:y + num_trows,
-                                       x:x + num_tcols] = tmp_tile[:, :]
+                    # if the tile is on the edge, it is smaller
+                    tile_width = min(num_tcols, num_icols - x)
+                    tile_height = min(num_trows, num_irows - y)
+
+                    plane[y:y + tile_height, x:x + tile_width] = \
+                        tmp_tile[:tile_height, :tile_width]
+
+
+        if samples_pp == 1:
+            # if there's only one sample per pixel there is only one plane
+            full_image = np.zeros((num_irows, num_icols), dtype=dtype)
+            tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
+            tmp_tile = np.ascontiguousarray(tmp_tile)
+            read_plane(full_image, 0, tmp_tile)
+        else:
+            if planar_config == PLANARCONFIG_CONTIG:
+                # if there is more than one sample per pixel and it's contiguous in memory,
+                # there is only one plane
+                full_image = np.zeros((num_irows, num_icols, samples_pp), dtype=dtype)
+                tmp_tile = np.zeros((num_trows, num_tcols, samples_pp), dtype=dtype)
+                tmp_tile = np.ascontiguousarray(tmp_tile)
+                read_plane(full_image, 0, tmp_tile)
+            elif planar_config == PLANARCONFIG_SEPARATE:
+                # multiple samples per pixel, each sample in one plane
+                full_image = np.zeros((samples_pp, num_irows, num_icols), dtype=dtype)
+                tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
+                tmp_tile = np.ascontiguousarray(tmp_tile)
+                for plane_index in xrange(samples_pp):
+                    read_plane(full_image[plane_index], plane_index, tmp_tile)
+            else:
+                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
 
         return full_image
 
@@ -1909,7 +1904,7 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
 
     data_array = a.read_tiles()
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
-    assert data_array.shape == (iwidth,), "tile data read was the wrong shape"
+    assert data_array.shape == (ilength, iwidth), "tile data read was the wrong shape"
     test_array = np.array(list(range(500)) * 6).astype(np.uint8).flatten()
     assert np.nonzero(data_array.flatten() != test_array)[0].shape[
                0] == 0, "tile data read was not the same as the expected data"
