@@ -159,7 +159,7 @@ def set_image_tags(tiff_file, im, compression=None):
     tiff_file.SetField(T.TIFFTAG_PHOTOMETRIC, T.PHOTOMETRIC_MINISBLACK)
     # TODO: currently libpytiff only supports 3D tiled images in "separate" planes
     # Is it even possible with TIFF to use Tiles + CONTIG? 
-    tiff_file.SetField(T.TIFFTAG_PLANARCONFIG, T.PLANARCONFIG_SEPARATE)
+    tiff_file.SetField(T.TIFFTAG_PLANARCONFIG, T.PLANARCONFIG_CONTIG)
 
     tiff_file.SetField(T.TIFFTAG_IMAGELENGTH, shape[0])
     tiff_file.SetField(T.TIFFTAG_IMAGEWIDTH, shape[1]) # TODO: why required by write_tiles()?
@@ -178,13 +178,14 @@ def set_image_tags(tiff_file, im, compression=None):
         # but some rare readers might support LZW only without predictor.
         tiff_file.SetField(T.TIFFTAG_PREDICTOR, T.PREDICTOR_HORIZONTAL)
 
-def generate_pyramid(ofn, im, compressed=False):
+def generate_pyramid(ofn, im, tags, compressed=False):
 
     compression = T.COMPRESSION_LZW if compressed else None
 
     # Create new Tiff file
     f = TIFF.open(ofn, mode='w')
 
+    logging.info("Generating image %s", ofn)
     shape = im.shape
     # Store the complete image, with tiles
     f.SetField(T.TIFFTAG_PAGENAME, "Full image") # Just example of metadata
@@ -193,11 +194,14 @@ def generate_pyramid(ofn, im, compressed=False):
     f.SetField(T.TIFFTAG_TILELENGTH, TILE_SIZE) # TODO: require it too?
     logging.info("Writing initial image at size %s", shape)
     set_image_tags(f, im, compression)
-    # LibTIFF will automatically write the next N directories as subdirectories
-    # when this tag is present.
     n = int(math.ceil(math.log(max(shape) / TILE_SIZE, 2)))
     logging.debug("Will generate %d sub-images", n)
+    # LibTIFF will automatically write the next N directories as subdirectories
+    # when this tag is present.
     f.SetField(T.TIFFTAG_SUBIFD, [0] * n, count=n)
+    for tag in tags:
+        if tag['value']:
+            f.SetField(tag['name'], tag['value'])
     f.write_tiles(im)
     f.WriteDirectory() # Needed after write_tiles() to indicate the completion of this image
 
@@ -216,6 +220,9 @@ def generate_pyramid(ofn, im, compressed=False):
         f.SetField(T.TIFFTAG_TILEWIDTH, TILE_SIZE) # This one is required in write_tiles()
         f.SetField(T.TIFFTAG_TILELENGTH, TILE_SIZE) # TODO: require it too?
         set_image_tags(f, subim, compression)
+        for tag in tags:
+            if tag['value']:
+                f.SetField(tag['name'], tag['value'])
         f.write_tiles(subim)
         f.WriteDirectory()    
 
@@ -266,7 +273,29 @@ def main(args):
 
     return 0
 
+def test_pyramids():
+    base_path = '/home/gstiebler/Projetos/Delmic/images'
+    image_names = ['overview', 'sem', 'ccd']
+    for image_name in image_names:
+        full_file_name = "%s/%s.tiff" % (base_path, image_name)
+        output_file_name = "%s/%s-pyr.tiff" % (base_path, image_name)
+        try:
+            tiff = TIFF.open(full_file_name, mode='r')
+            im = tiff.read_image()
+            tags_to_copy = ["BitsPerSample", "SampleFormat", "SamplesPerPixel",
+                            "PlanarConfig", "Photometric"]
+            tags = []
+            for tag_name in tags_to_copy:
+                tags.append({'name': tag_name, 'value': tiff.GetField(tag_name)});
+            generate_pyramid(output_file_name, im, tags, compressed=False)
+        except:
+            logging.exception("Unexpected error while performing action.")
+            return 127
+
+    return 0
+
 if __name__ == '__main__':
-    ret = main(sys.argv)
+    # ret = main(sys.argv)
+    ret = test_pyramids()
     logging.shutdown()
     exit(ret)
