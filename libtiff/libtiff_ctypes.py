@@ -826,7 +826,14 @@ class TIFF(ctypes.c_void_p):
             num_irows = 1
         num_icols = self.GetField("ImageWidth")
         if num_icols is None:
-            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")
+            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")  
+        # this number includes extra samples
+        samples_pp = self.GetField('SamplesPerPixel')
+        if samples_pp is None:  # default is 1
+            samples_pp = 1
+        planar_config = self.GetField('PlanarConfig')
+        if planar_config is None:  # default is contig
+            planar_config = PLANARCONFIG_CONTIG
         num_idepth = self.GetField("ImageDepth")
         if num_idepth is None:
             num_idepth = 1
@@ -845,16 +852,16 @@ class TIFF(ctypes.c_void_p):
         this_tile_height = min(num_trows, num_irows - y)
         this_tile_width = min(num_tcols, num_icols - x)
 
-        if num_idepth == 1:
-            # 2D
-            tile = np.zeros((num_trows, num_tcols), dtype=dtype)
-
+        def read_plane(tile_plane, plane_index):
+            """ Read one plane from TIFF. The TIFF has more than one plane only if
+            it has more than one sample per pixel, and planar_config == PLANARCONFIG_SEPARATE
+            """
             # the numpy array should be contigous in memory before calling ReadTile
-            tile = np.ascontiguousarray(tile)
+            tile_plane = np.ascontiguousarray(tile_plane)
             # even if the tile is on the edge, and the final size will be smaller,
             # the size of the array passed to the ReadTile function
             # must be (num_tcols, num_trows)
-            r = self.ReadTile(tile.ctypes.data, x, y, 0, 0)
+            r = self.ReadTile(tile_plane.ctypes.data, x, y, 0, plane_index)
             if not r:
                 raise ValueError(
                     "Could not read tile x:%d,y:%d,z:%d from file" % (x, y, z))
@@ -862,8 +869,30 @@ class TIFF(ctypes.c_void_p):
             # check if the tile is on the edge of the image
             if this_tile_height < num_trows or this_tile_width < num_tcols:
                 # if the tile is on the edge of the image, generate a smaller tile
-                tile = tile[:this_tile_height, :this_tile_width]
+                tile_plane = tile_plane[:this_tile_height, :this_tile_width]
+
+            return tile_plane
+
+        if num_idepth == 1:
+            if samples_pp == 1:
+                # the tile plane has always the size of a full tile
+                tile_plane = np.zeros((num_trows, num_tcols), dtype=dtype)
+                # this tile may be smaller than tile_plane
+                tile = read_plane(tile_plane, 0)
+            else:
+                if planar_config == PLANARCONFIG_CONTIG:
+                    # the tile plane has always the size of a full tile
+                    tile_plane = np.zeros((num_trows, num_tcols, samples_pp), dtype=dtype)
+                    # this tile may be smaller than tile_plane
+                    tile = read_plane(tile_plane, 0)
+                else:
+                    tile_plane = np.zeros((samples_pp, num_trows, num_tcols), dtype=dtype)
+                    for plane_index in xrange(samples_pp):
+                        tile[samples_pp] = read_plane(tile[samples_pp], samples_pp)
+
         else:
+            raise NotImplementedError("ImageDepth > 1 not implemented")
+            '''
             # 3D
             tile = np.zeros((num_idepth, this_tile_height, this_tile_width), dtype=dtype)
             tile_one_depth = np.zeros((num_trows, num_tcols), dtype=dtype)
@@ -886,6 +915,8 @@ class TIFF(ctypes.c_void_p):
                 else:
                     # copy the tile of the current depth to the final tile
                     tile[z, :, :] = tile_one_depth
+
+            '''
 
         return tile
 
@@ -2041,7 +2072,7 @@ def _test_read_one_tile():
 
     tiff.close()
 
-    # save an image with depth 3
+    # save an image with 3 samples per pixel
     filename_tiff3d = "/tmp/libtiff_test_read_one_tile.tiff"
     tiff3d = TIFF.open(filename_tiff3d, "w")
     tiff3d_data = np.zeros((1000, 1000, 3), dtype=np.uint8)
@@ -2056,6 +2087,9 @@ def _test_read_one_tile():
                       tiff3d_data.shape[1]) == 1, "could not set ImageWidth tag" 
     assert tiff3d.SetField("SamplesPerPixel",
                       tiff3d_data.shape[2]) == 1, "could not set SamplesPerPixel tag" 
+
+    assert tiff3d.SetField(TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG) == 1,\
+        "could not set PlanarConfig tag"
     assert tiff3d.SetField("ImageDepth", 1) == 1, "could not set ImageDepth tag"
     # Must be multiples of 16
     assert tiff3d.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
@@ -2073,11 +2107,11 @@ def _test_read_one_tile():
     # test the tile with 3 dimensions
     tile = tiff.read_one_tile(0, 0)
     # testing some pixels
-    assert tile.shape == (3, 512, 512), repr(tile.shape)
-    assert tile[0, 5, 5] == 8, repr(tile[0, 5, 5])
-    assert tile[1, 3, 2] == 23, repr(tile[1, 3, 2])
-    assert tile[2, 8, 9] == 42, repr(tile[2, 8, 9])
-    assert tile[0, 3, 3] == 0, repr(tile[0, 3, 3])
+    assert tile.shape == (512, 512, 3), repr(tile.shape)
+    assert tile[5, 5, 0] == 8, repr(tile[5, 5, 0])
+    assert tile[3, 2, 1] == 23, repr(tile[3, 2, 1])
+    assert tile[8, 9, 2] == 42, repr(tile[8, 9, 2])
+    assert tile[3, 3, 0] == 0, repr(tile[3, 3, 0])
 
     tiff3d.close()
 
