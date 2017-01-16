@@ -828,7 +828,7 @@ class TIFF(ctypes.c_void_p):
         return total_written_bytes
 
 
-    def read_one_tile(self, x, y, dtype=np.uint8):
+    def read_one_tile(self, x, y):
         """
         Reads one tile from the TIFF image
 
@@ -865,7 +865,7 @@ class TIFF(ctypes.c_void_p):
             num_irows = 1
         num_icols = self.GetField("ImageWidth")
         if num_icols is None:
-            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")  
+            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")
         # this number includes extra samples
         samples_pp = self.GetField('SamplesPerPixel')
         if samples_pp is None:  # default is 1
@@ -876,6 +876,11 @@ class TIFF(ctypes.c_void_p):
         num_idepth = self.GetField("ImageDepth")
         if num_idepth is None:
             num_idepth = 1
+        bits = self.GetField('BitsPerSample')
+        sample_format = self.GetField('SampleFormat')
+
+        # TODO: might need special support if bits < 8
+        dtype = self.get_numpy_type(bits, sample_format)
 
         if y < 0 or y >= num_irows:
             raise ValueError("Invalid y value")
