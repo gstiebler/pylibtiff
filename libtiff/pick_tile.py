@@ -21,25 +21,19 @@ def read_tile(fn, p, x, y, z):
     """Read one given tile in a tiff file -> numpy array"""
     f = TIFF.open(fn, mode='r')
 
-    # set page
-    f.SetDirectory(p)
-    logging.info("Looking for tile %d, %d, %d, %d", p, x, y, z)
-    # get the size of the tile
-    num_tcols = f.GetField("TileWidth")
-    num_trows = f.GetField("TileLength")
-    # if the image is not tiled, these values are None
-    if num_tcols is None or num_trows is None:
-        raise ValueError('The image does not have tiles')
+    count = 0
+    for im in f.iter_images():
 
-    # get the numpy value type
-    bits = f.GetField('BitsPerSample')
-    sample_format = f.GetField('SampleFormat')
-    dtype = f.get_numpy_type(bits, sample_format)
+        if count == p:
+            # get an array of offsets, one for each subimage
+            sub_ifds = f.GetField(T.TIFFTAG_SUBIFD)
+            if z > 0:
+                f.SetSubDirectory(sub_ifds[z - 1])
+            tile = f.read_one_tile(x, y)
+            break
 
-    tile = numpy.zeros((num_trows, num_tcols), dtype=dtype)
-    # the numpy array tile should be contiguous on memory
-    tile = numpy.ascontiguousarray(tile)
-    f.ReadTile(tile, x, y, z, 0)
+        f.SetDirectory(count)
+        count += 1
 
     return tile
 
@@ -61,6 +55,8 @@ def main(args):
                         help="page/directory number")
     parser.add_argument("--tile", "-t", dest="tile", required=True, nargs=3, type=int,
                         help="X,Y,Z position of the tile")
+    parser.add_argument("--output", "-o", dest="output", required=True,
+                        help="name of the output TIFF file")
 
     options = parser.parse_args(args[1:])
 
@@ -68,6 +64,9 @@ def main(args):
         p = options.page
         x, y, z = options.tile
         im = read_tile(options.input, p, x, y, z)
+        out = TIFF.open(options.output, mode='w')
+        out.write_image(im, None, len(im.shape) == 3)
+        print("tile saved")
     except:
         logging.exception("Unexpected error while performing action.")
         return 127
