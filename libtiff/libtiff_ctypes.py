@@ -374,8 +374,12 @@ tifftags = {
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
     TIFFTAG_TILEOFFSETS: (
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
-
-    TIFFTAG_SUBIFD: (ctypes.c_uint64 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint32**  count & IFD arrays
+    ''' Starting in libtiff 4.0, the SubIFD array of offsets became uint64
+    To work with versions of libtiff prior to 4.0, the line after the comment should be changed
+    by the following line:
+    TIFFTAG_SUBIFD: (ctypes.c_uint32 * 0, lambda d:d[1][:d[0].value]),
+    '''
+    TIFFTAG_SUBIFD: (ctypes.c_uint64 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint64**  count & IFD arrays
     TIFFTAG_BITSPERSAMPLE: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_CLEANFAXDATA: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_COMPRESSION: (ctypes.c_uint16, lambda _d: _d.value),
@@ -766,6 +770,8 @@ class TIFF(ctypes.c_void_p):
                         arr[y:y + tile_height, x:x + tile_width]
 
                     tile_arr = np.ascontiguousarray(tile_arr)
+                    # The image has only one depth (ImageDepth == 1), so 
+                    # the z parameter is always 0
                     r = self.WriteTile(tile_arr.ctypes.data, x, y, 0, plane_index)
                     written_bytes += r.value
 
@@ -784,7 +790,7 @@ class TIFF(ctypes.c_void_p):
                 total_written_bytes = write_plane(arr, 0, tile_arr)
             elif planar_config == PLANARCONFIG_SEPARATE:
                 # multiple samples per pixel, each sample in one plane
-                tile_arr = np.zeros((num_trows, num_tcols, samples_pp), dtype=arr.dtype)
+                tile_arr = np.zeros((num_trows, num_tcols), dtype=arr.dtype)
                 for plane_index in xrange(samples_pp):
                     total_written_bytes += write_plane(arr[plane_index], plane_index, tile_arr)
             else:
@@ -810,9 +816,12 @@ class TIFF(ctypes.c_void_p):
         Returns
         -------
         numpy.array
-            if the image is deeper than 1 slice (ImageDepth>1), it will
-            return a numpy array with 3 dimensions (depth, y, x). Otherwise
-            it will return a numpy array with 2 dimensions (y, x).
+            If there's only one sample per pixel, it returns a numpy array with 2 dimensions (x, y)
+            if the image has more than one sample per pixel (SamplesPerPixel > 1),
+            it will return a numpy array with 3 dimensions. If PlanarConfig == PLANARCONFIG_CONTIG,
+            the returned dimensions will be (x, y, sample_index). 
+            If PlanarConfig == PLANARCONFIG_SEPARATE, 
+            the returned dimensions will be (sample_index, x, y).
         """
 
         num_tcols = self.GetField("TileWidth")
@@ -861,6 +870,9 @@ class TIFF(ctypes.c_void_p):
             # even if the tile is on the edge, and the final size will be smaller,
             # the size of the array passed to the ReadTile function
             # must be (num_tcols, num_trows)
+            #
+            # The image has only one depth (ImageDepth == 1), so 
+            # the z parameter is always 0
             r = self.ReadTile(tile_plane.ctypes.data, x, y, 0, plane_index)
             if not r:
                 raise ValueError(
@@ -883,7 +895,8 @@ class TIFF(ctypes.c_void_p):
                 if planar_config == PLANARCONFIG_CONTIG:
                     # the tile plane has always the size of a full tile
                     tile_plane = np.zeros((num_trows, num_tcols, samples_pp), dtype=dtype)
-                    # this tile may be smaller than tile_plane
+                    # this tile may be smaller than tile_plane, 
+                    # if the tile is on the edge of the image
                     tile = read_plane(tile_plane, 0)
                 else:
                     tile_plane = np.zeros((samples_pp, num_trows, num_tcols), dtype=dtype)
