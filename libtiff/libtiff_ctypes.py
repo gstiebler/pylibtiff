@@ -805,7 +805,7 @@ class TIFF(ctypes.c_void_p):
                 else:
                     # multiple samples per pixel, each sample in one plane
                     tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
-                    for plane_index in xrange(samples_pp):
+                    for plane_index in xrange(depth):
                         total_written_bytes += \
                             write_plane(arr[plane_index], tile_arr, plane_index, width, height)
 
@@ -1904,8 +1904,14 @@ def _test_tile_write():
         "could not write tile images"  # 2D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
-    # 3D Arrays
+    # 3D Arrays, 3rd dimension as last dimension
     data_array = np.array(range(2500 * 3000 * 3)).reshape(2500, 3000, 3).astype(np.uint8)
+    assert a.write_tiles(data_array, 512, 528, None, True) == (512 * 528) * 5 * 6 * 3,\
+        "could not write tile images"  # 3D
+    print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
+
+    # 3D Arrays, 3rd dimension as first dimension
+    data_array = np.array(range(2500 * 3000 * 3)).reshape(3, 2500, 3000).astype(np.uint8)
     assert a.write_tiles(data_array, 512, 528, None, True) == (512 * 528) * 5 * 6 * 3,\
         "could not write tile images"  # 3D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
@@ -1973,7 +1979,7 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
         "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
 
-    # 3D Arrays
+    # 3D Arrays, 3rd dimension as last dimension
     a.SetDirectory(2)
     # expected tag values for the third image
     tags = [
@@ -1994,6 +2000,31 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
     assert data_array.shape == (2500, 3000, 3), "tile data read was the wrong shape"
     test_array = np.array(range(2500 * 3000 * 3)).reshape(2500, 3000, 3).astype(np.uint8).flatten()
+    assert np.nonzero(data_array.flatten() != test_array)[0].shape[ 0] == 0,\
+        "tile data read was not the same as the expected data"
+    print("Tile Read: Data is the same as expected from tile write test")
+
+    # 3D Arrays, 3rd dimension as first dimension
+    a.SetDirectory(3)
+    # expected tag values for the third image
+    tags = [
+        {"tag": "ImageWidth", "exp_value": 3000},
+        {"tag": "ImageLength", "exp_value": 2500},
+        {"tag": "TileWidth", "exp_value": 512},
+        {"tag": "TileLength", "exp_value": 528},
+        {"tag": "BitsPerSample", "exp_value": 8},
+        {"tag": "Compression", "exp_value": 1},
+    ]
+
+    # assert tag values
+    for tag in tags:
+        field_value = a.GetField(tag['tag'])
+        assert field_value == tag['exp_value'], repr(tag['tag'], tag['exp_value'], field_value)
+
+    data_array = a.read_tiles()
+    print("Tile Read: Read array of shape %r" % (data_array.shape,))
+    assert data_array.shape == (3, 2500, 3000), "tile data read was the wrong shape"
+    test_array = np.array(range(2500 * 3000 * 3)).reshape(3, 2500, 3000).astype(np.uint8).flatten()
     assert np.nonzero(data_array.flatten() != test_array)[0].shape[ 0] == 0,\
         "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
