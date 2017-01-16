@@ -374,11 +374,10 @@ tifftags = {
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
     TIFFTAG_TILEOFFSETS: (
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
-    ''' Starting in libtiff 4.0, the SubIFD array of offsets became uint64
-    To work with versions of libtiff prior to 4.0, the line after the comment should be changed
-    by the following line:
-    TIFFTAG_SUBIFD: (ctypes.c_uint32 * 0, lambda d:d[1][:d[0].value]),
-    '''
+    # Starting in libtiff 4.0, the SubIFD array of offsets became uint64
+    # To work with versions of libtiff prior to 4.0, the line after the comment should be changed
+    # by the following line:
+    # TIFFTAG_SUBIFD: (ctypes.c_uint32 * 0, lambda d:d[1][:d[0].value]),
     TIFFTAG_SUBIFD: (ctypes.c_uint64 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint64**  count & IFD arrays
     TIFFTAG_BITSPERSAMPLE: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_CLEANFAXDATA: (ctypes.c_uint16, lambda _d: _d.value),
@@ -702,101 +701,132 @@ class TIFF(ctypes.c_void_p):
         else:
             raise NotImplementedError(repr(shape))
 
-    def write_tiles(self, arr):
-        num_tcols = self.GetField("TileWidth")
-        if num_tcols is None:
-            raise ValueError("TIFFTAG_TILEWIDTH must be set to write tiles")
-        num_trows = self.GetField("TileLength")
-        if num_trows is None:
-            num_trows = 1
-        num_irows = self.GetField("ImageLength")
-        if num_irows is None:
-            num_irows = 1
-        num_icols = self.GetField("ImageWidth")
-        if num_icols is None:
-            raise ValueError("TIFFTAG_IMAGEWIDTH must be set to write tiles")
-        # this number includes extra samples
-        samples_pp = self.GetField('SamplesPerPixel')
-        if samples_pp is None:  # default is 1
-            samples_pp = 1
-        planar_config = self.GetField('PlanarConfig')
-        if planar_config is None:  # default is contig
-            planar_config = PLANARCONFIG_CONTIG
+    def write_tiles(self, arr, tile_width, tile_height, compression=None, write_rgb=False):
+        compression = self._fix_compression(compression)
 
-        if len(arr.shape) == 1 and arr.shape[0] != num_icols:
-            raise ValueError(
-                "Input array %r must have the same shape as the image tags "
-                "%r" % (arr.shape, (num_icols,)))
-        if len(arr.shape) == 2 and (
-                        arr.shape[0] != num_irows or
-                        arr.shape[1] != num_icols):
-            raise ValueError(
-                "Input array %r must have same shape as image tags %r" % (
-                    arr.shape, (num_irows, num_icols)))
-        if len(arr.shape) == 3:
-            if planar_config == PLANARCONFIG_CONTIG:
-                if (arr.shape[0] != num_irows or
-                        arr.shape[1] != num_icols or
-                        arr.shape[2] != samples_pp):
-                    raise ValueError(
-                        "Input array %r must have same shape as image tags %r" % (
-                            arr.shape, (num_irows, num_icols, samples_pp)))
-            elif planar_config == PLANARCONFIG_SEPARATE:
-                if (arr.shape[0] != samples_pp or
-                        arr.shape[1] != num_irows or
-                        arr.shape[2] != num_icols):
-                    raise ValueError(
-                        "Input array %r must have same shape as image tags %r" % (
-                            arr.shape, (samples_pp, num_irows, num_icols)))
-            else:
-                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
-        if len(arr.shape) > 3:
-            raise ValueError("Can not write tiles for more than 3 dimensions")
+        if arr.dtype in np.sctypes['float']:
+            sample_format = SAMPLEFORMAT_IEEEFP
+        elif arr.dtype in np.sctypes['uint'] + [np.bool]:
+            sample_format = SAMPLEFORMAT_UINT
+        elif arr.dtype in np.sctypes['int']:
+            sample_format = SAMPLEFORMAT_INT
+        elif arr.dtype in np.sctypes['complex']:
+            sample_format = SAMPLEFORMAT_COMPLEXIEEEFP
+        else:
+            raise NotImplementedError(repr(arr.dtype))
+        shape = arr.shape
+        bits = arr.itemsize * 8
 
-        def write_plane(arr, plane_index, tile_arr):
+        self.SetField(TIFFTAG_COMPRESSION, compression)
+        if compression == COMPRESSION_LZW and sample_format in \
+                [SAMPLEFORMAT_INT, SAMPLEFORMAT_UINT]:
+            # This field can only be set after compression and before
+            # writing data. Horizontal predictor often improves compression,
+            # but some rare readers might support LZW only without predictor.
+            self.SetField(TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL)
+
+        assert self.SetField(TIFFTAG_BITSPERSAMPLE, bits)
+        assert self.SetField(TIFFTAG_SAMPLEFORMAT, sample_format)
+        assert self.SetField(TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT)
+        assert self.SetField(TIFFTAG_TILEWIDTH, tile_width)
+        assert self.SetField(TIFFTAG_TILELENGTH, tile_height)
+
+        total_written_bytes = 0
+        if len(shape) == 1:
+            shape = (shape[0], 1)  # Same as 2D with height == 1
+
+        def write_plane(arr, tile_arr, plane_index, image_width, image_height):
+            """ Write all tiles of one plane
+            """
             written_bytes = 0
+            tile_arr = np.ascontiguousarray(tile_arr)
             # Rows
-            for y in range(0, num_irows, num_trows):
+            for y in range(0, height, tile_height):
                 # Cols
-                for x in range(0, num_icols, num_tcols):
+                for x in range(0, width, tile_width):
                     # If we are over the edge of the image, use 0 as fill
                     tile_arr[:] = 0
 
                     # if the tile is on the edge, it is smaller
-                    tile_width = min(num_tcols, num_icols - x)
-                    tile_height = min(num_trows, num_irows - y)
+                    this_tile_width = min(tile_width, width - x)
+                    this_tile_height = min(tile_height, height - y)
 
-                    tile_arr[:tile_height, :tile_width] = \
-                        arr[y:y + tile_height, x:x + tile_width]
+                    tile_arr[:this_tile_height, :this_tile_width] = \
+                        arr[y:y + this_tile_height, x:x + this_tile_width]
 
-                    tile_arr = np.ascontiguousarray(tile_arr)
-                    # The image has only one depth (ImageDepth == 1), so 
+                    # The image has only one depth (ImageDepth == 1), so
                     # the z parameter is always 0
                     r = self.WriteTile(tile_arr.ctypes.data, x, y, 0, plane_index)
                     written_bytes += r.value
 
             return written_bytes
 
-        total_written_bytes = 0
-        if samples_pp == 1:
+        if len(shape) == 2:
+            height, width = shape
+
+            self.SetField(TIFFTAG_IMAGEWIDTH, width)
+            self.SetField(TIFFTAG_IMAGELENGTH, height)
+            self.SetField(TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK)
+            self.SetField(TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG)
+
             # if there's only one sample per pixel, there is only one plane
-            tile_arr = np.zeros((num_trows, num_tcols), dtype=arr.dtype)
-            total_written_bytes = write_plane(arr, 0, tile_arr)
-        else:
-            if planar_config == PLANARCONFIG_CONTIG:
-                # if there is more than one sample per pixel and it's contiguous in memory,
-                # there is only one plane
-                tile_arr = np.zeros((num_trows, num_tcols, samples_pp), dtype=arr.dtype)
-                total_written_bytes = write_plane(arr, 0, tile_arr)
-            elif planar_config == PLANARCONFIG_SEPARATE:
-                # multiple samples per pixel, each sample in one plane
-                tile_arr = np.zeros((num_trows, num_tcols), dtype=arr.dtype)
-                for plane_index in xrange(samples_pp):
-                    total_written_bytes += write_plane(arr[plane_index], plane_index, tile_arr)
+            tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
+            total_written_bytes = write_plane(arr, tile_arr, 0, width, height)
+            self.WriteDirectory()
+        elif len(shape) == 3:
+            if write_rgb:
+                # Guess the planar config, with preference for separate planes
+                if shape[2] == 3 or shape[2] == 4:
+                    planar_config = PLANARCONFIG_CONTIG
+                    height, width, depth = shape
+                else:
+                    planar_config = PLANARCONFIG_SEPARATE
+                    depth, height, width = shape
+
+                self.SetField(TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB)
+                self.SetField(TIFFTAG_IMAGEWIDTH, width)
+                self.SetField(TIFFTAG_IMAGELENGTH, height)
+                self.SetField(TIFFTAG_SAMPLESPERPIXEL, depth)
+                self.SetField(TIFFTAG_PLANARCONFIG, planar_config)
+                if depth == 4:  # RGBA
+                    self.SetField(TIFFTAG_EXTRASAMPLES,
+                                  [EXTRASAMPLE_UNASSALPHA],
+                                  count=1)
+                elif depth > 4:  # No idea...
+                    self.SetField(TIFFTAG_EXTRASAMPLES,
+                                  [EXTRASAMPLE_UNSPECIFIED] * (depth - 3),
+                                  count=(depth - 3))
+
+                if planar_config == PLANARCONFIG_CONTIG:
+                    # if there is more than one sample per pixel and it's contiguous in memory,
+                    # there is only one plane
+                    tile_arr = np.zeros((tile_height, tile_width, depth), dtype=arr.dtype)
+                    total_written_bytes = write_plane(arr, tile_arr, 0, width, height)
+                else:
+                    # multiple samples per pixel, each sample in one plane
+                    tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
+                    for plane_index in xrange(samples_pp):
+                        total_written_bytes += \
+                            write_plane(arr[plane_index], tile_arr, plane_index, width, height)
+
+                self.WriteDirectory()
             else:
-                raise IOError("Unexpected PlanarConfig = %d" % planar_config)
+                depth, height, width = shape
+                for _n in range(depth):
+                    self.SetField(TIFFTAG_IMAGEWIDTH, width)
+                    self.SetField(TIFFTAG_IMAGELENGTH, height)
+                    self.SetField(TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK)
+                    self.SetField(TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG)
+
+                    # if there's only one sample per pixel, there is only one plane
+                    tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
+                    total_written_bytes = write_plane(arr, tile_arr, 0, width, height)
+                    self.WriteDirectory()
+        else:
+            raise NotImplementedError(repr(shape))
 
         return total_written_bytes
+
 
     def read_one_tile(self, x, y, dtype=np.uint8):
         """
@@ -1863,72 +1893,22 @@ def _test_custom_tags():
 def _test_tile_write():
     a = TIFF.open("/tmp/libtiff_test_tile_write.tiff", "w")
 
-    # 1D Arrays (doesn't make much sense to tile)
-    assert a.SetField("ImageWidth",
-                      3000) == 1, "could not set ImageWidth tag"  # 1D,2D,3D
-    assert a.SetField("ImageLength",
-                      1) == 1, "could not set ImageLength tag"  # 1D
-    assert a.SetField("ImageDepth",
-                      1) == 1, "could not set ImageDepth tag"  # 1D,2D
-    # Must be multiples of 16
-    assert a.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
-    assert a.SetField("TileLength", 528) == 1, "could not set TileLength tag"
-    assert a.SetField("BitsPerSample",
-                      8) == 1, "could not set BitsPerSample tag"
-    assert a.SetField("Compression",
-                      COMPRESSION_NONE) == 1, "could not set Compression tag"
     data_array = np.tile(list(range(500)), (1, 6)).astype(np.uint8)
-    assert a.write_tiles(data_array) == (512 * 528) * 6, "could " \
-        "not write " \
-        "tile images"  # 1D
-
-    a.WriteDirectory()
+    assert a.write_tiles(data_array, 512, 528) == (512 * 528) * 6,\
+        "could not write tile images"  # 1D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
     # 2D Arrays
-    assert a.SetField("ImageWidth",
-                      3000) == 1, "could not set ImageWidth tag"  # 1D,2D,3D
-    assert a.SetField("ImageLength",
-                      2500) == 1, "could not set ImageLength tag"  # 2D,3D
-    assert a.SetField("ImageDepth",
-                      1) == 1, "could not set ImageDepth tag"  # 1D,2D
-    # Must be multiples of 16
-    assert a.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
-    assert a.SetField("TileLength", 528) == 1, "could not set TileLength tag"
-    assert a.SetField("BitsPerSample",
-                      8) == 1, "could not set BitsPerSample tag"
-    assert a.SetField("Compression",
-                      COMPRESSION_NONE) == 1, "could not set Compression tag"
     data_array = np.tile(list(range(500)), (2500, 6)).astype(np.uint8)
-    assert a.write_tiles(data_array) == (512 * 528) * 5 * 6, "could not " \
-        "write tile " \
-        "images"  # 2D
-    a.WriteDirectory()
+    assert a.write_tiles(data_array, 512, 528) == (512 * 528) * 5 * 6,\
+        "could not write tile images"  # 2D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
-    '''
     # 3D Arrays
-    assert a.SetField("ImageWidth",
-                      3000) == 1, "could not set ImageWidth tag"  # 1D,2D,3D
-    assert a.SetField("ImageLength",
-                      2500) == 1, "could not set ImageLength tag"  # 2D,3D
-    assert a.SetField("ImageDepth",
-                      3) == 1, "could not set ImageDepth tag"  # 3D
-    assert a.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
-    assert a.SetField("TileLength", 528) == 1, "could not set TileLength tag"
-    assert a.SetField("BitsPerSample",
-                      8) == 1, "could not set BitsPerSample tag"
-    assert a.SetField("Compression",
-                      COMPRESSION_NONE) == 1, "could not set Compression tag"
-    data_array = np.tile(list(range(500)), (3, 2500, 6)).astype(np.uint8)
-    assert a.write_tiles(data_array) == (512 * 528) * 5 * 6 * 3, "could " \
-                                                                 "not " \
-                                                                 "write " \
-                                                                 "tile " \
-                                                                 "images"  # 3D
-    a.WriteDirectory()
+    data_array = np.array(range(2500 * 3000 * 3)).reshape(2500, 3000, 3).astype(np.uint8)
+    assert a.write_tiles(data_array, 512, 528, None, True) == (512 * 528) * 5 * 6 * 3,\
+        "could not write tile images"  # 3D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
-    '''
 
     print("Tile Write: SUCCESS")
 
@@ -1945,92 +1925,82 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
 
     # 1D Arrays (doesn't make much sense to tile)
     a.SetDirectory(0)
-    iwidth = tmp = a.GetField("ImageWidth")
-    assert tmp is not None, "ImageWidth tag must be defined for reading tiles"
-    ilength = tmp = a.GetField("ImageLength")
-    assert tmp is not None, "ImageLength tag must be defined for reading tiles"
-    idepth = tmp = a.GetField("ImageDepth")
-    assert tmp is not None, "ImageDepth tag must be defined for reading tiles"
-    tmp = a.GetField("TileWidth")
-    assert tmp is not None, "TileWidth tag must be defined for reading tiles"
-    tmp = a.GetField("TileLength")
-    assert tmp is not None, "TileLength tag must be defined for reading tiles"
-    tmp = a.GetField("BitsPerSample")
-    assert tmp is not None, "BitsPerSample tag must be defined for reading " \
-                            "tiles"
-    tmp = a.GetField("Compression")
-    assert tmp is not None, "Compression tag must be defined for reading tiles"
+    # expected tag values for the first image
+    tags = [
+        {"tag": "ImageWidth", "exp_value": 3000},
+        {"tag": "ImageLength", "exp_value": 1},
+        {"tag": "TileWidth", "exp_value": 512},
+        {"tag": "TileLength", "exp_value": 528},
+        {"tag": "BitsPerSample", "exp_value": 8},
+        {"tag": "Compression", "exp_value": 1},
+    ]
+
+    # assert tag values
+    for tag in tags:
+        field_value = a.GetField(tag['tag'])
+        assert field_value == tag['exp_value'], repr((tag['tag'], tag['exp_value'], field_value))
 
     data_array = a.read_tiles()
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
-    assert data_array.shape == (ilength, iwidth), "tile data read was the wrong shape"
+    assert data_array.shape == (1, 3000), "tile data read was the wrong shape"
     test_array = np.array(list(range(500)) * 6).astype(np.uint8).flatten()
-    assert np.nonzero(data_array.flatten() != test_array)[0].shape[
-               0] == 0, "tile data read was not the same as the expected data"
+    assert np.nonzero(data_array.flatten() != test_array)[0].shape[0] == 0,\
+        "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
 
     # 2D Arrays (doesn't make much sense to tile)
     a.SetDirectory(1)
-    iwidth = tmp = a.GetField("ImageWidth")
-    assert tmp is not None, "ImageWidth tag must be defined for reading tiles"
-    ilength = tmp = a.GetField("ImageLength")
-    assert tmp is not None, "ImageLength tag must be defined for reading tiles"
-    idepth = tmp = a.GetField("ImageDepth")
-    assert tmp is not None, "ImageDepth tag must be defined for reading tiles"
-    tmp = a.GetField("TileWidth")
-    assert tmp is not None, "TileWidth tag must be defined for reading tiles"
-    tmp = a.GetField("TileLength")
-    assert tmp is not None, "TileLength tag must be defined for reading tiles"
-    tmp = a.GetField("BitsPerSample")
-    assert tmp is not None, "BitsPerSample tag must be defined for reading " \
-                            "tiles"
-    tmp = a.GetField("Compression")
-    assert tmp is not None, "Compression tag must be defined for reading tiles"
+    # expected tag values for the second image
+    tags = [
+        {"tag": "ImageWidth", "exp_value": 3000},
+        {"tag": "ImageLength", "exp_value": 2500},
+        {"tag": "TileWidth", "exp_value": 512},
+        {"tag": "TileLength", "exp_value": 528},
+        {"tag": "BitsPerSample", "exp_value": 8},
+        {"tag": "Compression", "exp_value": 1},
+    ]
+
+    # assert tag values
+    for tag in tags:
+        field_value = a.GetField(tag['tag'])
+        assert field_value == tag['exp_value'], repr((tag['tag'], tag['exp_value'], field_value))
 
     data_array = a.read_tiles()
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
-    assert data_array.shape == (
-        ilength, iwidth), "tile data read was the wrong shape"
-    test_array = np.tile(list(range(500)), (2500, 6)).astype(
-        np.uint8).flatten()
-    assert np.nonzero(data_array.flatten() != test_array)[0].shape[
-               0] == 0, "tile data read was not the same as the expected data"
+    assert data_array.shape == (2500, 3000), "tile data read was the wrong shape"
+    test_array = np.tile(list(range(500)), (2500, 6)).astype(np.uint8).flatten()
+    assert np.nonzero(data_array.flatten() != test_array)[0].shape[0] == 0,\
+        "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
 
-    '''
-    TODO replace by multiple samples per pixel
-    # 3D Arrays (doesn't make much sense to tile)
+    # 3D Arrays
     a.SetDirectory(2)
-    iwidth = tmp = a.GetField("ImageWidth")
-    assert tmp is not None, "ImageWidth tag must be defined for reading tiles"
-    ilength = tmp = a.GetField("ImageLength")
-    assert tmp is not None, "ImageLength tag must be defined for reading tiles"
-    idepth = tmp = a.GetField("ImageDepth")
-    assert tmp is not None, "ImageDepth tag must be defined for reading tiles"
-    tmp = a.GetField("TileWidth")
-    assert tmp is not None, "TileWidth tag must be defined for reading tiles"
-    tmp = a.GetField("TileLength")
-    assert tmp is not None, "TileLength tag must be defined for reading tiles"
-    tmp = a.GetField("BitsPerSample")
-    assert tmp is not None, "BitsPerSample tag must be defined for reading " \
-                            "tiles"
-    tmp = a.GetField("Compression")
-    assert tmp is not None, "Compression tag must be defined for reading tiles"
+    # expected tag values for the third image
+    tags = [
+        {"tag": "ImageWidth", "exp_value": 3000},
+        {"tag": "ImageLength", "exp_value": 2500},
+        {"tag": "TileWidth", "exp_value": 512},
+        {"tag": "TileLength", "exp_value": 528},
+        {"tag": "BitsPerSample", "exp_value": 8},
+        {"tag": "Compression", "exp_value": 1},
+    ]
+
+    # assert tag values
+    for tag in tags:
+        field_value = a.GetField(tag['tag'])
+        assert field_value == tag['exp_value'], repr(tag['tag'], tag['exp_value'], field_value)
 
     data_array = a.read_tiles()
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
-    assert data_array.shape == (
-        idepth, ilength, iwidth), "tile data read was the wrong shape"
-    test_array = np.tile(list(range(500)), (3, 2500, 6)).astype(
-        np.uint8).flatten()
-    assert np.nonzero(data_array.flatten() != test_array)[0].shape[
-               0] == 0, "tile data read was not the same as the expected data"
+    assert data_array.shape == (2500, 3000, 3), "tile data read was the wrong shape"
+    test_array = np.array(range(2500 * 3000 * 3)).reshape(2500, 3000, 3).astype(np.uint8).flatten()
+    assert np.nonzero(data_array.flatten() != test_array)[0].shape[ 0] == 0,\
+        "tile data read was not the same as the expected data"
     print("Tile Read: Data is the same as expected from tile write test")
-    '''
 
     print("Tile Read: SUCCESS")
 
-def _test_read_one_tile():        
+def _test_read_one_tile():
     # _test_tile_write is called here just to make sure that the image is saved,
     # even if the order of the tests changed
     _test_tile_write()
@@ -2083,51 +2053,6 @@ def _test_read_one_tile():
     except ValueError as inst:
         assert inst.message == "Invalid y value", repr(inst.message)
 
-    tiff.close()
-
-    # save an image with 3 samples per pixel
-    filename_tiff3d = "/tmp/libtiff_test_read_one_tile.tiff"
-    tiff3d = TIFF.open(filename_tiff3d, "w")
-    tiff3d_data = np.zeros((1000, 1000, 3), dtype=np.uint8)
-
-    # write on some pixels to test later
-    tiff3d_data[5, 5, 0] = 8
-    tiff3d_data[3, 2, 1] = 23
-    tiff3d_data[8, 9, 2] = 42
-    assert tiff3d.SetField("ImageLength",
-                      tiff3d_data.shape[0]) == 1, "could not set ImageLength tag"
-    assert tiff3d.SetField("ImageWidth",
-                      tiff3d_data.shape[1]) == 1, "could not set ImageWidth tag" 
-    assert tiff3d.SetField("SamplesPerPixel",
-                      tiff3d_data.shape[2]) == 1, "could not set SamplesPerPixel tag" 
-
-    assert tiff3d.SetField(TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG) == 1,\
-        "could not set PlanarConfig tag"
-    assert tiff3d.SetField("ImageDepth", 1) == 1, "could not set ImageDepth tag"
-    # Must be multiples of 16
-    assert tiff3d.SetField("TileWidth", 512) == 1, "could not set TileWidth tag"
-    assert tiff3d.SetField("TileLength", 512) == 1, "could not set TileLength tag"
-    assert tiff3d.SetField("BitsPerSample",
-                      8) == 1, "could not set BitsPerSample tag"
-    assert tiff3d.SetField("Compression",
-                      COMPRESSION_NONE) == 1, "could not set Compression tag"
-
-    tiff3d.write_tiles(tiff3d_data)
-    tiff3d.close()
-
-    # open the previously saved image
-    tiff3d = TIFF.open(filename_tiff3d, "r")
-    # test the tile with 3 dimensions
-    tile = tiff.read_one_tile(0, 0)
-    # testing some pixels
-    assert tile.shape == (512, 512, 3), repr(tile.shape)
-    assert tile[5, 5, 0] == 8, repr(tile[5, 5, 0])
-    assert tile[3, 2, 1] == 23, repr(tile[3, 2, 1])
-    assert tile[8, 9, 2] == 42, repr(tile[8, 9, 2])
-    assert tile[3, 3, 0] == 0, repr(tile[3, 3, 0])
-
-    tiff3d.close()
-
 
 def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     """
@@ -2149,7 +2074,6 @@ def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     # test tag values
     assert_image_tag(tiff, 'ImageWidth', 3000)
     assert_image_tag(tiff, 'ImageLength', 2500)
-    assert_image_tag(tiff, 'ImageDepth', 1)
     assert_image_tag(tiff, 'TileWidth', 512)
     assert_image_tag(tiff, 'TileLength', 528)
     assert_image_tag(tiff, 'BitsPerSample', 8)
@@ -2162,7 +2086,7 @@ def _test_tiled_image_read(filename="/tmp/libtiff_test_tile_write.tiff"):
         'Image width expected to be 2500, but it\'s %d' % (arr.shape[0])
     assert arr.shape[1] == 3000, \
         'Image height expected to be 3000, but it\'s %d' % (arr.shape[1])
-    
+
     # generates the same array that was generated for the image
     data_array = np.array(list(range(500)) * 6).astype(np.uint8)
     # tests if the array from the read image is the same of the original image
