@@ -233,21 +233,15 @@ def read_pyramid(file_name, base_path, image_name):
 
     f = TIFF.open(file_name, mode='r')
 
-    #for temp in f.iter_images():        
-    #    print(temp.shape)
-
     count = 0
     for im in f.iter_images():
         # get an array of offsets, one for each subimage
         sub_ifds = f.GetField(T.TIFFTAG_SUBIFD)
-        print(sub_ifds)
 
         directory = "%s/%s" % (base_path, image_name)
         if not os.path.exists(directory):
             os.makedirs(directory)
 
-        im = f.read_image()
-        print(im.shape)
         write_image(im, base_path, count, 0)
 
         for n in xrange(len(sub_ifds)):
@@ -255,14 +249,10 @@ def read_pyramid(file_name, base_path, image_name):
             f.SetSubDirectory(sub_ifds[n])
             # read the subimage
             im = f.read_image()
-            print(im.shape)
 
             write_image(im, base_path, count, n + 1)
 
         f.SetDirectory(count)
-        if f.LastDirectory():
-            break
-
         count += 1
 
 
