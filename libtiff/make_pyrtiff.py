@@ -181,77 +181,90 @@ def set_image_tags(tiff_file, im, compression=None):
         # but some rare readers might support LZW only without predictor.
         tiff_file.SetField(T.TIFFTAG_PREDICTOR, T.PREDICTOR_HORIZONTAL)
 
-def generate_pyramid(ofn, im, compressed=False):
+def generate_pyramid(ofn, images, compressed=False):
 
     compression = T.COMPRESSION_LZW if compressed else None
 
     # Create new Tiff file
     f = TIFF.open(ofn, mode='w')
-
     logging.info("Generating image %s", ofn)
-    shape = im.shape
-    # Store the complete image, with tiles
-    f.SetField(T.TIFFTAG_PAGENAME, "Full image") # Just example of metadata
 
-    logging.info("Writing initial image at size %s", shape)
-    #set_image_tags(f, im, compression)
-    n = int(math.ceil(math.log(max(shape) / TILE_SIZE, 2)))
-    logging.debug("Will generate %d sub-images", n)
-    # LibTIFF will automatically write the next N directories as subdirectories
-    # when this tag is present.
-    f.SetField(T.TIFFTAG_SUBIFD, [0] * n, count=n)
-    # assums that if the array has 3 dimensions, the 3rd dimension is color
-    is_rgb = len(im.shape) == 3
-    f.write_tiles(im, TILE_SIZE, TILE_SIZE, compression, is_rgb)
+    for im in images:
+        shape = im.shape
+        # Store the complete image, with tiles
+        f.SetField(T.TIFFTAG_PAGENAME, "Full image") # Just example of metadata
 
-    # Until the size is < 1 tile:
-    z = 0
-    while shape[0] > TILE_SIZE and shape[1] > TILE_SIZE:
-        # Resample the image by 0.5x0.5
-        # Add it as subpage, with tiles
-        z += 1
-        shape = (im.shape[0] // 2**z, im.shape[1] // 2**z)
-        if len(im.shape) == 3:
-            shape = shape + (3,)
-        logging.info("Computing image at size %s", shape)
-        subim = rescale_hq(im, shape)
+        logging.info("Writing initial image at size %s", shape)
+        #set_image_tags(f, im, compression)
+        n = int(math.ceil(math.log(max(shape) / TILE_SIZE, 2)))
+        logging.debug("Will generate %d sub-images", n)
+        # LibTIFF will automatically write the next N directories as subdirectories
+        # when this tag is present.
+        f.SetField(T.TIFFTAG_SUBIFD, [0] * n, count=n)
+        # assums that if the array has 3 dimensions, the 3rd dimension is color
+        is_rgb = len(im.shape) == 3
+        f.write_tiles(im, TILE_SIZE, TILE_SIZE, compression, is_rgb)
 
-        # Before writting the actual data, we set the special metadata
-        f.SetField(T.TIFFTAG_SUBFILETYPE, T.FILETYPE_REDUCEDIMAGE) # TODO: & T.FILETYPE_PAGE ? ImageMagick only put REDUCEDIMAGE
+        # Until the size is < 1 tile:
+        z = 0
+        while shape[0] > TILE_SIZE and shape[1] > TILE_SIZE:
+            # Resample the image by 0.5x0.5
+            # Add it as subpage, with tiles
+            z += 1
+            shape = (im.shape[0] // 2**z, im.shape[1] // 2**z)
+            if len(im.shape) == 3:
+                shape = shape + (3,)
+            logging.info("Computing image at size %s", shape)
+            subim = rescale_hq(im, shape)
 
-        # set_image_tags(f, subim, compression)
-        f.write_tiles(subim, TILE_SIZE, TILE_SIZE, compression, is_rgb)
+            # Before writting the actual data, we set the special metadata
+            f.SetField(T.TIFFTAG_SUBFILETYPE, T.FILETYPE_REDUCEDIMAGE) # TODO: & T.FILETYPE_PAGE ? ImageMagick only put REDUCEDIMAGE
 
-    f.close()
+            # set_image_tags(f, subim, compression)
+            f.write_tiles(subim, TILE_SIZE, TILE_SIZE, compression, is_rgb)
+
 
 def read_pyramid(file_name, base_path, image_name):
 
-    def write_image(im, base_path, image_name, n):
-        out_file = "%s/%s/image%d.tiff" % (base_path, image_name, n)
+    def write_image(im, base_path, count, n):
+        out_file = "%s/%s/image%d_sub%d.tiff" % (base_path, image_name, count, n)
         a = TIFF.open(out_file, "w")
         a.write_image(im, None, len(im.shape) == 3)
 
     f = TIFF.open(file_name, mode='r')
 
-    # get an array of offsets, one for each subimage
-    sub_ifds = f.GetField(T.TIFFTAG_SUBIFD)
-    print(sub_ifds)
+    #for temp in f.iter_images():        
+    #    print(temp.shape)
 
-    directory = "%s/%s" % (base_path, image_name)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+    count = 0
+    for im in f.iter_images():
+        # get an array of offsets, one for each subimage
+        sub_ifds = f.GetField(T.TIFFTAG_SUBIFD)
+        print(sub_ifds)
 
-    im = f.read_image()
-    write_image(im, base_path, image_name, 0)
+        directory = "%s/%s" % (base_path, image_name)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
-    for n in xrange(len(sub_ifds)):
-        # set the offset of the current subimage
-        f.SetSubDirectory(sub_ifds[n])
-        # read the subimage
         im = f.read_image()
         print(im.shape)
+        write_image(im, base_path, count, 0)
 
-        write_image(im, base_path, image_name, n + 1)
+        for n in xrange(len(sub_ifds)):
+            # set the offset of the current subimage
+            f.SetSubDirectory(sub_ifds[n])
+            # read the subimage
+            im = f.read_image()
+            print(im.shape)
+
+            write_image(im, base_path, count, n + 1)
+
+        f.SetDirectory(count)
+        if f.LastDirectory():
+            break
+
+        count += 1
+
 
 def main(args):
     """
@@ -287,6 +300,8 @@ def main(args):
 def test_pyramids():
     base_path = '/home/gstiebler/Projetos/Delmic/images'
     image_names = ['overview', 'sem', 'ccd']
+    
+    # write each image in a different pyramid image
     for image_name in image_names:
         full_file_name = "%s/%s.tiff" % (base_path, image_name)
         output_file_name = "%s/%s-pyr.tiff" % (base_path, image_name)
@@ -295,11 +310,28 @@ def test_pyramids():
             im = tiff.read_image()
             #tags_to_copy = ["BitsPerSample", "SampleFormat", "SamplesPerPixel",
             #                "PlanarConfig", "Photometric"]
-            generate_pyramid(output_file_name, im, compressed=False)
+            generate_pyramid(output_file_name, [im], compressed=False)
             read_pyramid(output_file_name, base_path, image_name)
         except:
             logging.exception("Unexpected error while performing action.")
             return 127
+
+    # write all images in the same pyramid image 
+    images = []
+    for image_name in image_names:
+        full_file_name = "%s/%s.tiff" % (base_path, image_name)
+        try:
+            tiff = TIFF.open(full_file_name, mode='r')
+            im = tiff.read_image()
+            images.append(im)
+        except:
+            logging.exception("Unexpected error while performing action.")
+            return 127
+
+    all_images_name = "all-images"
+    output_file_name = "%s/%s-pyr.tiff" % (base_path, all_images_name)
+    generate_pyramid(output_file_name, images, compressed=False)
+    read_pyramid(output_file_name, base_path, all_images_name)
 
     return 0
 
