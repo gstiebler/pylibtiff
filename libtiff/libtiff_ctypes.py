@@ -374,8 +374,11 @@ tifftags = {
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
     TIFFTAG_TILEOFFSETS: (
         ctypes.POINTER(ctypes.c_uint32), lambda _d: _d.contents),
-
-    TIFFTAG_SUBIFD: (ctypes.c_uint32 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint32**  count & IFD arrays
+    # Starting in libtiff 4.0, the SubIFD array of offsets became uint64
+    # To work with versions of libtiff prior to 4.0, the line after the comment should be changed
+    # by the following line:
+    # TIFFTAG_SUBIFD: (ctypes.c_uint32 * 0, lambda d:d[1][:d[0].value]),
+    TIFFTAG_SUBIFD: (ctypes.c_uint64 * 0, lambda d:d[1][:d[0].value]),  # uint16*,uint64**  count & IFD arrays
     TIFFTAG_BITSPERSAMPLE: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_CLEANFAXDATA: (ctypes.c_uint16, lambda _d: _d.value),
     TIFFTAG_COMPRESSION: (ctypes.c_uint16, lambda _d: _d.value),
