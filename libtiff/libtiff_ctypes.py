@@ -840,8 +840,6 @@ class TIFF(ctypes.c_void_p):
         y: int
             Index of the first pixel on the Y axis.
             It must be a multiple of the tile height
-        dtype: int
-            The type of numpy items. It can be uint8, uint16, etc.
 
         Returns
         -------
