@@ -1116,7 +1116,6 @@ class TIFF(ctypes.c_void_p):
             while reading the directory's contents.
         """
         return libtiff.TIFFSetSubDirectory(self, diroff)
-    setsubdirectory = SetSubDirectory
 
     @debug
     def Fileno(self):
@@ -1189,9 +1188,15 @@ class TIFF(ctypes.c_void_p):
         Parameters
         ----------
         buf: array
-            contiguous array of bytes
+            Contiguous array of bytes. It must already be allocated
+            and be sufficiently big to hold an entire tile.
+            The function TIFFTileSize can be used to find out the size (in bytes) of this buffer
         x: int
+            The x coordinate of the top left pixel of the tile.
+            It must be a multiple of TileWidth
         y: int
+            The y coordinate of the top left pixel of the tile.
+            It must be a multiple of TileLength
         z: int
             It is used if the image is deeper than 1 slice (ImageDepth>1)
         sample: integer
@@ -1205,7 +1210,6 @@ class TIFF(ctypes.c_void_p):
             otherwise the number of bytes in the decoded tile is returned.
         """
         return libtiff.TIFFReadTile(self, buf, x, y, z, sample)
-    readtile = ReadTile
 
     @debug
     def WriteTile(self, buf, x, y, z, sample):
@@ -1214,9 +1218,13 @@ class TIFF(ctypes.c_void_p):
         Parameters
         ----------
         arr: array
-            contiguous array of bytes
+            Contiguous array of bytes
         x: int
+            The x coordinate of the top left pixel of the tile.
+            It must be a multiple of TileWidth
         y: int
+            The y coordinate of the top left pixel of the tile.
+            It must be a multiple of TileLength
         z: int
             It is used if the image is deeper than 1 slice (ImageDepth>1)
         sample: integer
@@ -1232,7 +1240,6 @@ class TIFF(ctypes.c_void_p):
         r = libtiff.TIFFWriteTile(self, buf, x, y, z, sample)
         assert r.value >= 0, repr(r.value)
         return r
-    writetile = WriteTile
 
     closed = False
 
