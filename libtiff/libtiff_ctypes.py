@@ -768,8 +768,7 @@ class TIFF(ctypes.c_void_p):
                             tile_arr[0, :] = arr[x:x + num_tcols]
 
                     tile_arr = np.ascontiguousarray(tile_arr)
-                    r = libtiff.TIFFWriteTile(self, tile_arr.ctypes.data, x, y,
-                                              z, 0)
+                    r = self.WriteTile(tile_arr.ctypes.data, x, y, z, 0)
                     status = status + r.value
 
         return status
@@ -807,8 +806,7 @@ class TIFF(ctypes.c_void_p):
         for z in range(0, num_idepth):
             for y in range(0, num_irows, num_trows):
                 for x in range(0, num_icols, num_tcols):
-                    r = libtiff.TIFFReadTile(self, tmp_tile.ctypes.data, x, y,
-                                             z, 0)
+                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, z, 0)
                     if not r:
                         raise ValueError(
                             "Could not read tile x:%d,y:%d,z:%d from file" % (
@@ -903,6 +901,36 @@ class TIFF(ctypes.c_void_p):
     setdirectory = SetDirectory
 
     @debug
+    def SetSubDirectory(self, diroff):
+        """
+        Changes the current directory
+        and reads its contents with TIFFReadDirectory.
+        The parameter dirnum specifies the subfile/directory as
+        an integer number, with the first directory numbered zero.
+
+        SetSubDirectory acts like SetDirectory,
+        except the directory is specified as a file offset instead of an index;
+        this is required for accessing subdirectories
+        linked through a SubIFD tag.
+
+        Parameters
+        ----------
+        diroff: int
+            The offset of the subimage. It's important to notice that
+            it is not an index, like dirnum on SetDirectory
+
+        Returns
+        -------
+        int
+            On successful return 1 is returned.
+            Otherwise, 0 is returned if dirnum or diroff
+            specifies a non-existent directory,
+            or if an error was encountered
+            while reading the directory's contents.
+        """
+        return libtiff.TIFFSetSubDirectory(self, diroff)
+
+    @debug
     def Fileno(self):
         return libtiff.TIFFFileno(self)
     fileno = Fileno
@@ -965,6 +993,70 @@ class TIFF(ctypes.c_void_p):
         r = libtiff.TIFFWriteEncodedStrip(self, strip, buf, size)
         assert r.value == size, repr((r.value, size))
     writeencodedstrip = WriteEncodedStrip
+
+    @debug
+    def ReadTile(self, buf, x, y, z, sample):
+        """ Read and decode a tile of data from an open TIFF file
+
+        Parameters
+        ----------
+        buf: array
+            Content read from the tile.
+            The buffer must be large enough to hold an entire tile of data.
+            Applications should call the routine TIFFTileSize
+            to find out the size (in bytes) of a tile buffer.
+        x: int
+            X coordinate of the upper left pixel of the tile.
+            It must be a multiple of TileWidth.
+        y: int
+            Y coordinate of the upper left pixel of the tile.
+            It must be a multiple of TileLength.
+        z: int
+            It is used if the image is deeper than 1 slice (ImageDepth>1)
+        sample: integer
+            It is used only if data are organized
+            in separate planes (PlanarConfiguration=2)
+
+        Returns
+        -------
+        int
+            -1 if it detects an error;
+            otherwise the number of bytes in the decoded tile is returned.
+        """
+        return libtiff.TIFFReadTile(self, buf, x, y, z, sample)
+
+    @debug
+    def WriteTile(self, buf, x, y, z, sample):
+        """ TIFFWriteTile - encode and write a tile of data to an open TIFF file
+
+        Parameters
+        ----------
+        arr: array
+            Content to be written to the tile.
+            The buffer must be contain an entire tile of data.
+            Applications should call the routine TIFFTileSize
+            to find out the size (in bytes) of a tile buffer.
+        x: int
+            X coordinate of the upper left pixel of the tile.
+            It must be a multiple of TileWidth.
+        y: int
+            Y coordinate of the upper left pixel of the tile.
+            It must be a multiple of TileLength.
+        z: int
+            It is used if the image is deeper than 1 slice (ImageDepth>1)
+        sample: integer
+            It is used only if data are organized
+            in separate planes (PlanarConfiguration=2)
+
+        Returns
+        -------
+        int
+            -1 if it detects an error;
+            otherwise the number of bytes in the tile is returned.
+        """
+        r = libtiff.TIFFWriteTile(self, buf, x, y, z, sample)
+        assert r.value >= 0, repr(r.value)
+        return r
 
     closed = False
 
@@ -1696,7 +1788,7 @@ def _test_tile_write():
     print("Tile Write: SUCCESS")
 
 
-def _test_tile_read(filename=None):
+def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     import sys
     if filename is None:
         if len(sys.argv) != 2:
