@@ -1767,7 +1767,11 @@ def _test_tile_write():
     a = TIFF.open("/tmp/libtiff_test_tile_write.tiff", "w")
 
     data_array = np.tile(list(range(500)), (1, 6)).astype(np.uint8)
-    assert a.write_tiles(data_array, 512, 528) == (512 * 528) * 6,\
+    a.SetField("TileWidth", 512)
+    a.SetField("TileLength", 528)
+    # tile_width and tile_height is not set, write_tiles get these values from
+    # TileWidth and TileLength tags
+    assert a.write_tiles(data_array) == (512 * 528) * 6,\
         "could not write tile images"  # 1D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
