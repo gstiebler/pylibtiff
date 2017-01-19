@@ -837,6 +837,9 @@ class TIFF(ctypes.c_void_p):
         num_irows = self.GetField("ImageLength")
         if num_irows is None:
             num_irows = 1
+        num_depths = self.GetField("ImageDepth")
+        if num_depths is None:
+            num_depths = 1
         # this number includes extra samples
         samples_pp = self.GetField('SamplesPerPixel')
         if samples_pp is None:  # default is 1
@@ -845,14 +848,13 @@ class TIFF(ctypes.c_void_p):
         if planar_config is None:  # default is contig
             planar_config = PLANARCONFIG_CONTIG
 
-        def read_plane(plane, plane_index, tmp_tile):
+        def read_plane(plane, tmp_tile, plane_index=0, depth_index=0):
             for y in xrange(0, num_irows, num_trows):
                 for x in xrange(0, num_icols, num_tcols):
-                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, 0, plane_index)
+                    r = self.ReadTile(tmp_tile.ctypes.data, x, y, depth_index, plane_index)
                     if not r:
                         raise ValueError(
-                            "Could not read tile x:%d,y:%d,z:%d from file" % (
-                                x, y, z))
+                            "Could not read tile x:%d,y:%d,z:%d from file" % (x, y, z))
 
                     # if the tile is on the edge, it is smaller
                     tile_width = min(num_tcols, num_icols - x)
@@ -861,13 +863,19 @@ class TIFF(ctypes.c_void_p):
                     plane[y:y + tile_height, x:x + tile_width] = \
                         tmp_tile[:tile_height, :tile_width]
 
-
         if samples_pp == 1:
-            # if there's only one sample per pixel there is only one plane
-            full_image = np.zeros((num_irows, num_icols), dtype=dtype)
-            tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
-            tmp_tile = np.ascontiguousarray(tmp_tile)
-            read_plane(full_image, 0, tmp_tile)
+            if num_depths == 1:
+                # if there's only one sample per pixel there is only one plane
+                full_image = np.zeros((num_irows, num_icols), dtype=dtype)
+                tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
+                tmp_tile = np.ascontiguousarray(tmp_tile)
+                read_plane(full_image, tmp_tile)
+            else:
+                full_image = np.zeros((num_depths, num_irows, num_icols), dtype=dtype)
+                tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
+                tmp_tile = np.ascontiguousarray(tmp_tile)
+                for depth_index in xrange(num_depths):
+                    read_plane(full_image[depth_index], tmp_tile, 0, depth_index)
         else:
             if planar_config == PLANARCONFIG_CONTIG:
                 # if there is more than one sample per pixel and it's contiguous in memory,
@@ -875,14 +883,14 @@ class TIFF(ctypes.c_void_p):
                 full_image = np.zeros((num_irows, num_icols, samples_pp), dtype=dtype)
                 tmp_tile = np.zeros((num_trows, num_tcols, samples_pp), dtype=dtype)
                 tmp_tile = np.ascontiguousarray(tmp_tile)
-                read_plane(full_image, 0, tmp_tile)
+                read_plane(full_image, tmp_tile)
             elif planar_config == PLANARCONFIG_SEPARATE:
                 # multiple samples per pixel, each sample in one plane
                 full_image = np.zeros((samples_pp, num_irows, num_icols), dtype=dtype)
                 tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
                 tmp_tile = np.ascontiguousarray(tmp_tile)
                 for plane_index in xrange(samples_pp):
-                    read_plane(full_image[plane_index], plane_index, tmp_tile)
+                    read_plane(full_image[plane_index], tmp_tile, plane_index)
             else:
                 raise IOError("Unexpected PlanarConfig = %d" % planar_config)
 
@@ -1913,6 +1921,24 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
     print("Tile Read: Data is the same as expected from tile write test")
 
     # Grayscale image with 3 depths
+    a.SetDirectory(4)
+
+    # expected tag values for the third image
+    tags = [
+        {"tag": "ImageWidth", "exp_value": 3000},
+        {"tag": "ImageLength", "exp_value": 2500},
+        {"tag": "TileWidth", "exp_value": 512},
+        {"tag": "TileLength", "exp_value": 528},
+        {"tag": "BitsPerSample", "exp_value": 8},
+        {"tag": "Compression", "exp_value": 1},
+        {"tag": "ImageDepth", "exp_value": 3}
+    ]
+
+    # assert tag values
+    for tag in tags:
+        field_value = a.GetField(tag['tag'])
+        assert field_value == tag['exp_value'], repr([tag['tag'], tag['exp_value'], field_value])
+
     data_array = a.read_tiles()
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
     assert data_array.shape == (3, 2500, 3000), "tile data read was the wrong shape"
