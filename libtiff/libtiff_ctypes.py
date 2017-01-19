@@ -866,29 +866,25 @@ class TIFF(ctypes.c_void_p):
         if samples_pp == 1:
             if num_depths == 1:
                 # if there's only one sample per pixel there is only one plane
-                full_image = np.zeros((num_irows, num_icols), dtype=dtype)
-                tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
-                tmp_tile = np.ascontiguousarray(tmp_tile)
+                full_image = np.empty((num_irows, num_icols), dtype=dtype, order='C')
+                tmp_tile = np.empty((num_trows, num_tcols), dtype=dtype, order='C')
                 read_plane(full_image, tmp_tile)
             else:
-                full_image = np.zeros((num_depths, num_irows, num_icols), dtype=dtype)
-                tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
-                tmp_tile = np.ascontiguousarray(tmp_tile)
+                full_image = np.empty((num_depths, num_irows, num_icols), dtype=dtype, order='C')
+                tmp_tile = np.empty((num_trows, num_tcols), dtype=dtype, order='C')
                 for depth_index in xrange(num_depths):
                     read_plane(full_image[depth_index], tmp_tile, 0, depth_index)
         else:
             if planar_config == PLANARCONFIG_CONTIG:
                 # if there is more than one sample per pixel and it's contiguous in memory,
                 # there is only one plane
-                full_image = np.zeros((num_irows, num_icols, samples_pp), dtype=dtype)
-                tmp_tile = np.zeros((num_trows, num_tcols, samples_pp), dtype=dtype)
-                tmp_tile = np.ascontiguousarray(tmp_tile)
+                full_image = np.empty((num_irows, num_icols, samples_pp), dtype=dtype, order='C')
+                tmp_tile = np.empty((num_trows, num_tcols, samples_pp), dtype=dtype, order='C')
                 read_plane(full_image, tmp_tile)
             elif planar_config == PLANARCONFIG_SEPARATE:
                 # multiple samples per pixel, each sample in one plane
-                full_image = np.zeros((samples_pp, num_irows, num_icols), dtype=dtype)
-                tmp_tile = np.zeros((num_trows, num_tcols), dtype=dtype)
-                tmp_tile = np.ascontiguousarray(tmp_tile)
+                full_image = np.empty((samples_pp, num_irows, num_icols), dtype=dtype, order='C')
+                tmp_tile = np.empty((num_trows, num_tcols), dtype=dtype, order='C')
                 for plane_index in xrange(samples_pp):
                     read_plane(full_image[plane_index], tmp_tile, plane_index)
             else:
