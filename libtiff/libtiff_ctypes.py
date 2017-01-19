@@ -830,7 +830,7 @@ class TIFF(ctypes.c_void_p):
             raise ValueError("TIFFTAG_TILEWIDTH must be set to read tiles")
         num_trows = self.GetField("TileLength")
         if num_trows is None:
-            num_trows = 1
+            raise ValueError("TIFFTAG_TILELENGTH must be set to read tiles")
         num_icols = self.GetField("ImageWidth")
         if num_icols is None:
             raise ValueError("TIFFTAG_IMAGEWIDTH must be set to read tiles")
