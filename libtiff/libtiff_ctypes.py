@@ -733,7 +733,7 @@ class TIFF(ctypes.c_void_p):
         if len(shape) == 1:
             shape = (shape[0], 1)  # Same as 2D with height == 1
 
-        def write_plane(arr, tile_arr, plane_index, width, height):
+        def write_plane(arr, tile_arr, width, height, plane_index=0, depth_index=0):
             """ Write all tiles of one plane
             """
             written_bytes = 0
@@ -752,9 +752,7 @@ class TIFF(ctypes.c_void_p):
                     tile_arr[:this_tile_height, :this_tile_width] = \
                         arr[y:y + this_tile_height, x:x + this_tile_width]
 
-                    # The image has only one depth (ImageDepth == 1), so
-                    # the z parameter is always 0
-                    r = self.WriteTile(tile_arr.ctypes.data, x, y, 0, plane_index)
+                    r = self.WriteTile(tile_arr.ctypes.data, x, y, depth_index, plane_index)
                     written_bytes += r.value
 
             return written_bytes
@@ -769,7 +767,7 @@ class TIFF(ctypes.c_void_p):
 
             # if there's only one sample per pixel, there is only one plane
             tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
-            total_written_bytes = write_plane(arr, tile_arr, 0, width, height)
+            total_written_bytes = write_plane(arr, tile_arr, width, height)
             self.WriteDirectory()
         elif len(shape) == 3:
             if write_rgb:
@@ -799,27 +797,28 @@ class TIFF(ctypes.c_void_p):
                     # if there is more than one sample per pixel and it's contiguous in memory,
                     # there is only one plane
                     tile_arr = np.zeros((tile_height, tile_width, depth), dtype=arr.dtype)
-                    total_written_bytes = write_plane(arr, tile_arr, 0, width, height)
+                    total_written_bytes = write_plane(arr, tile_arr, width, height)
                 else:
                     # multiple samples per pixel, each sample in one plane
                     tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
                     for plane_index in xrange(depth):
                         total_written_bytes += \
-                            write_plane(arr[plane_index], tile_arr, plane_index, width, height)
+                            write_plane(arr[plane_index], tile_arr, width, height, plane_index)
 
                 self.WriteDirectory()
             else:
                 depth, height, width = shape
-                for _n in range(depth):
-                    self.SetField(TIFFTAG_IMAGEWIDTH, width)
-                    self.SetField(TIFFTAG_IMAGELENGTH, height)
-                    self.SetField(TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK)
-                    self.SetField(TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG)
-
+                self.SetField(TIFFTAG_IMAGEWIDTH, width)
+                self.SetField(TIFFTAG_IMAGELENGTH, height)
+                self.SetField(TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK)
+                self.SetField(TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG)
+                self.SetField(TIFFTAG_IMAGEDEPTH, depth)
+                for depth_index in range(depth):
                     # if there's only one sample per pixel, there is only one plane
                     tile_arr = np.zeros((tile_height, tile_width), dtype=arr.dtype)
-                    total_written_bytes = write_plane(arr, tile_arr, 0, width, height)
-                    self.WriteDirectory()
+                    total_written_bytes += write_plane(arr[depth_index], tile_arr, width, height,
+                                                       0, depth_index)
+                self.WriteDirectory()
         else:
             raise NotImplementedError(repr(shape))
 
@@ -1793,6 +1792,13 @@ def _test_tile_write():
         "could not write tile images"  # 3D
     print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
 
+    # Grayscale image with 3 depths
+    data_array = np.array(range(2500 * 3000 * 3)).reshape(3, 2500, 3000).astype(np.uint8)
+    written_bytes = a.write_tiles(data_array, 512, 528)
+    assert written_bytes == 512 * 528 * 5 * 6 * 3,\
+        "could not write tile images, written_bytes: %s" % (written_bytes,)
+    print("Tile Write: Wrote array of shape %r" % (data_array.shape,))
+
     print("Tile Write: SUCCESS")
 
 
@@ -1898,6 +1904,15 @@ def _test_tile_read(filename="/tmp/libtiff_test_tile_write.tiff"):
         field_value = a.GetField(tag['tag'])
         assert field_value == tag['exp_value'], repr(tag['tag'], tag['exp_value'], field_value)
 
+    data_array = a.read_tiles()
+    print("Tile Read: Read array of shape %r" % (data_array.shape,))
+    assert data_array.shape == (3, 2500, 3000), "tile data read was the wrong shape"
+    test_array = np.array(range(2500 * 3000 * 3)).reshape(3, 2500, 3000).astype(np.uint8).flatten()
+    assert np.nonzero(data_array.flatten() != test_array)[0].shape[ 0] == 0,\
+        "tile data read was not the same as the expected data"
+    print("Tile Read: Data is the same as expected from tile write test")
+
+    # Grayscale image with 3 depths
     data_array = a.read_tiles()
     print("Tile Read: Read array of shape %r" % (data_array.shape,))
     assert data_array.shape == (3, 2500, 3000), "tile data read was the wrong shape"
